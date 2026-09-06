@@ -3,6 +3,8 @@ import type { AgentEvent, EventSink } from "../../agent/events.js";
 import { redactSecrets } from "../../policy/sensitive-data.js";
 import { renderMarkdown } from "./markdown.js";
 
+type Colors = ReturnType<typeof pc.createColors>;
+
 function textWidth(value: string): number {
   return [...value].reduce(
     (width, character) => width + (/[^\u0000-\u00FF]/u.test(character) ? 2 : 1),
@@ -28,7 +30,11 @@ function wrapText(value: string, width: number): string[] {
   return lines;
 }
 
-function confirmationPanel(request: Extract<AgentEvent, { type: "confirmation_requested" }>['request'], language: "zh-CN" | "en"): string {
+function confirmationPanel(
+  request: Extract<AgentEvent, { type: "confirmation_requested" }>["request"],
+  language: "zh-CN" | "en",
+  colors: Colors
+): string {
   const zh = language === "zh-CN";
   const label = (name: string, value: string): string => `${name}: ${value}`;
   const rawLines = [
@@ -46,46 +52,52 @@ function confirmationPanel(request: Extract<AgentEvent, { type: "confirmation_re
   const styleLine = (line: string): string => {
     const separator = line.indexOf(":");
     const styled = separator > 0
-      ? `${pc.bold(line.slice(0, separator + 1))}${line.slice(separator + 1)}`
+      ? `${colors.bold(line.slice(0, separator + 1))}${line.slice(separator + 1)}`
       : line;
-    return `${pc.yellow("┃")} ${styled}${" ".repeat(Math.max(0, width - textWidth(line)))} ${pc.yellow("┃")}`;
+    return `${colors.yellow("┃")} ${styled}${" ".repeat(Math.max(0, width - textWidth(line)))} ${colors.yellow("┃")}`;
   };
   return [
-    `${pc.yellow("┏━")}${pc.bgYellow(pc.black(header))}${pc.yellow("━".repeat(topFill))}${pc.yellow("┓")}`,
+    `${colors.yellow("┏━")}${colors.bgYellow(colors.black(header))}${colors.yellow("━".repeat(topFill))}${colors.yellow("┓")}`,
     ...lines.map(styleLine),
-    `${pc.yellow("┗")}${pc.yellow("━".repeat(width + 2))}${pc.yellow("┛")}`
+    `${colors.yellow("┗")}${colors.yellow("━".repeat(width + 2))}${colors.yellow("┛")}`
   ].join("\n");
 }
 
-export function createHumanRenderer(options: { verbose: boolean; language: "zh-CN" | "en" }): EventSink {
+export function createHumanRenderer(options: {
+  verbose: boolean;
+  language: "zh-CN" | "en";
+  plain?: boolean;
+  noColor?: boolean;
+}): EventSink {
+  const colors = pc.createColors(pc.isColorSupported && !(options.plain || options.noColor));
   return (event: AgentEvent) => {
     switch (event.type) {
       case "status":
-        process.stderr.write(`${pc.dim(event.message)}\n`);
+        process.stderr.write(`${colors.dim(event.message)}\n`);
         break;
       case "tool_start":
-        process.stderr.write(`${pc.cyan("→")} ${pc.bold(event.name)}: ${event.summary}\n`);
+        process.stderr.write(`${colors.cyan("→")} ${colors.bold(event.name)}: ${event.summary}\n`);
         break;
       case "tool_result":
-        process.stderr.write(`${event.success ? pc.green("✓") : pc.red("✗")} ${event.message} ${pc.dim(`(${event.durationMs}ms)`)}\n`);
+        process.stderr.write(`${event.success ? colors.green("✓") : colors.red("✗")} ${event.message} ${colors.dim(`(${event.durationMs}ms)`)}\n`);
         if (options.verbose && event.data !== undefined) {
           const serialized = redactSecrets(JSON.stringify(event.data, null, 2)).value;
-          process.stderr.write(`${pc.dim(serialized)}\n`);
+          process.stderr.write(`${colors.dim(serialized)}\n`);
         }
         break;
       case "confirmation_requested": {
         const { request } = event;
-        process.stderr.write(`${confirmationPanel(request, options.language)}\n`);
+        process.stderr.write(`${confirmationPanel(request, options.language, colors)}\n`);
         break;
       }
       case "confirmation_resolved":
-        process.stderr.write(`${event.approved ? pc.green(options.language === "zh-CN" ? "✓ 已批准" : "✓ Approved") : pc.red(options.language === "zh-CN" ? "✗ 未批准" : "✗ Not approved")}\n`);
+        process.stderr.write(`${event.approved ? colors.green(options.language === "zh-CN" ? "✓ 已批准" : "✓ Approved") : colors.red(options.language === "zh-CN" ? "✗ 未批准" : "✗ Not approved")}\n`);
         break;
       case "assistant_delta":
         // Markdown is rendered after the complete assistant message arrives.
         break;
       case "assistant":
-        process.stdout.write(`${renderMarkdown(event.content)}\n`);
+        process.stdout.write(`${renderMarkdown(event.content, colors)}\n`);
         break;
     }
   };

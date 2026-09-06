@@ -36,7 +36,10 @@ cj "列出当前目录最大的五个文件"
 cj "查找所有包含 TODO 的 TypeScript 文件"
 cj "创建 notes.txt，写入今天的待办事项"
 cj "查看当前 Git 状态"
+cj chat
 ```
+
+`cj chat` 在 TTY 中启动多轮会话。输入 `/clear` 清空上下文，`/status` 查看会话状态，`/tools` 查看可用工具，`/history` 查看脱敏审计历史，`/exit` 退出。方向键可浏览输入历史；一次粘贴的多行内容会作为一个问题提交。`Ctrl+C` 首次取消当前模型请求或 Tool，再次退出会话。
 
 Useful options:
 
@@ -45,9 +48,13 @@ Useful options:
 --verbose               Show detailed, redacted Tool results
 --language zh-CN|en     Override the response language
 --timeout 30s           Lower the configured task timeout
+--plain                 Use readable output without terminal styling
+--no-color              Disable ANSI colors
 ```
 
 Human-readable assistant replies are rendered for the terminal: headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code blocks, and GFM tables are formatted instead of showing Markdown markers literally. JSONL mode keeps the original event payloads for automation.
+
+`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode.
 
 ## Built-in Tools
 
@@ -116,3 +123,5 @@ npm run test:live
 ```
 
 See [DESIGN.md](./DESIGN.md) for the detailed architecture and accepted product decisions.
+
+See [ROADMAP.md](./ROADMAP.md) for post-MVP feature planning, with improved interactive experience as the first milestone.

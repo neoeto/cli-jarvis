@@ -9,7 +9,8 @@
   "files": [
     "dist",
     "README.md",
-    "DESIGN.md"
+    "DESIGN.md",
+    "ROADMAP.md"
   ],
   "engines": {
     "node": ">=20"

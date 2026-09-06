@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/agent/runtime.js";
 import type { AgentEvent } from "../src/agent/events.js";
-import type { ModelProvider, ModelRequest, ModelResponse } from "../src/providers/types.js";
+import type { AgentMessage, ModelProvider, ModelRequest, ModelResponse } from "../src/providers/types.js";
 import { ListFilesTool } from "../src/tools/builtins/list-files.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { PreparedAction, Tool, ToolContext, ToolResult } from "../src/tools/types.js";
@@ -61,6 +61,39 @@ describe("AgentRuntime", () => {
       "tool_result",
       "assistant"
     ]);
+  });
+
+  it("can continue a successful turn with the same in-memory transcript", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    await writeFile(path.join(root, "hello.txt"), "hello");
+    const provider = new FakeProvider();
+    const messages: AgentMessage[] = [];
+    const base = {
+      provider,
+      model: "fake-model",
+      registry: new ToolRegistry().register(new ListFilesTool()),
+      workspaceRoot: root,
+      language: "zh-CN" as const,
+      maxToolCalls: 20,
+      messages,
+      interactive: false
+    };
+
+    await new AgentRuntime({ ...base, signal: new AbortController().signal }).run("列出文件");
+    await expect(
+      new AgentRuntime({ ...base, signal: new AbortController().signal }).run("那里面有什么？")
+    ).resolves.toBe("目录中有一个文件：hello.txt");
+
+    const secondTurnRequest = provider.requests[2];
+    expect(secondTurnRequest?.messages.filter((message) => message.role === "user")).toEqual([
+      { role: "user", content: "列出文件" },
+      { role: "user", content: "那里面有什么？" }
+    ]);
+    expect(secondTurnRequest?.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      content: "目录中有一个文件：hello.txt"
+    });
   });
 
   it("returns invalid Tool arguments to the model without executing", async () => {

@@ -52,6 +52,19 @@ const ok = true;
     }
   });
 
+  it("supports explicitly plain human output", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const renderer = createHumanRenderer({ verbose: false, language: "en", plain: true });
+      await renderer({ type: "assistant", content: "**plain**" });
+      const output = String(write.mock.calls[0]?.[0]);
+      expect(output).toContain("plain");
+      expect(output).not.toContain("\u001b[");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("renders confirmation details as a visually distinct panel", async () => {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {

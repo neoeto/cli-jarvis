@@ -15,6 +15,14 @@ export interface AgentRuntimeOptions {
   language: "zh-CN" | "en";
   maxToolCalls: number;
   signal: AbortSignal;
+  /**
+   * Optional in-memory transcript used by a multi-turn session.
+   *
+   * The runtime only adds normalized messages and never persists this array.
+   * Callers should pass a copy and commit it after a successful turn when a
+   * failed turn must not be visible to the next request.
+   */
+  messages?: AgentMessage[];
   interactive?: boolean;
   confirm?: ConfirmationHandler;
   policy?: PolicyEngine;
@@ -39,16 +47,24 @@ function serializableResult(result: ToolResult): string {
 }
 
 export class AgentRuntime {
-  constructor(private readonly options: AgentRuntimeOptions) {}
+  private readonly messages: AgentMessage[];
+
+  constructor(private readonly options: AgentRuntimeOptions) {
+    this.messages = options.messages ?? [];
+    if (this.messages.length === 0) {
+      this.messages.push({
+        role: "system",
+        content: createSystemPrompt(options.workspaceRoot, options.language)
+      });
+    }
+  }
 
   async run(prompt: string): Promise<string> {
     const { provider, model, registry, workspaceRoot, language, maxToolCalls, signal } = this.options;
     const emit: EventSink = this.options.onEvent ?? (() => undefined);
     const policy = this.options.policy ?? new PolicyEngine();
-    const messages: AgentMessage[] = [
-      { role: "system", content: createSystemPrompt(workspaceRoot, language) },
-      { role: "user", content: prompt }
-    ];
+    const messages = this.messages;
+    messages.push({ role: "user", content: prompt });
     const context: ToolContext = { workspaceRoot, signal, language };
     let executedCalls = 0;
     let invalidCalls = 0;

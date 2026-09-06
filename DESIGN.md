@@ -37,7 +37,8 @@ The model is a planner and Tool caller. It is never the security boundary. The C
 ### 2.1 Command surface
 
 ```text
-cj <prompt...>                 Run a task
+cj <prompt...>                 Run a single task
+cj chat                        Run an interactive multi-turn session
 cj config                     Configure an LLM provider interactively
 cj config list                Show configuration with secrets redacted
 cj tools list                 List registered Tools
@@ -55,6 +56,8 @@ Global options:
 --verbose                      Include detailed Tool inputs and outputs, still redacted
 --language <zh-CN|en>          Override the configured display language
 --timeout <duration>           Lower the task timeout; cannot exceed policy maximum
+--plain                        Use readable output without terminal styling
+--no-color                     Disable ANSI colors
 ```
 
 There is deliberately no global `--yes`, permanent trust switch, or automatic `sudo` option.
@@ -236,7 +239,7 @@ Model arguments are always parsed as untrusted JSON and validated against the re
 
 ### 5.3 Message handling
 
-The per-task transcript lives only in memory. It contains:
+The per-task transcript, and the multi-turn session transcript used by `cj chat`, live only in memory. A session commits a turn's normalized messages only after that turn succeeds. They contain:
 
 - The system policy prompt.
 - The user request and clarification answers.
