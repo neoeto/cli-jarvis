@@ -51,4 +51,31 @@ const ok = true;
       write.mockRestore();
     }
   });
+
+  it("renders confirmation details as a visually distinct panel", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const renderer = createHumanRenderer({ verbose: false, language: "zh-CN" });
+      await renderer({
+        type: "confirmation_requested",
+        request: {
+          actionId: "internal-action-id",
+          toolName: "run_command",
+          summary: "在工作区运行 npm test",
+          targets: ["/workspace/project"],
+          effects: ["process", "write"],
+          reversible: false
+        }
+      });
+      const serialized = write.mock.calls.map(([value]) => String(value)).join("");
+      expect(serialized).toContain("┏");
+      expect(serialized).toContain("┃");
+      expect(serialized).toContain("┗");
+      expect(serialized).toContain("需要确认");
+      expect(serialized).toContain("操作:");
+      expect(serialized).toContain("目标:");
+    } finally {
+      write.mockRestore();
+    }
+  });
 });
