@@ -47,6 +47,8 @@ Useful options:
 --timeout 30s           Lower the configured task timeout
 ```
 
+Human-readable assistant replies are rendered for the terminal: headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code blocks, and GFM tables are formatted instead of showing Markdown markers literally. JSONL mode keeps the original event payloads for automation.
+
 ## Built-in Tools
 
 | Tool | Capability |

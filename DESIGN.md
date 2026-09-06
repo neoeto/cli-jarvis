@@ -74,6 +74,8 @@ Understanding task…
 
 `--json` emits one JSON object per line with a versioned event type. Prompts and confirmations use the input language when detectable, otherwise the configured language.
 
+Human-readable assistant messages are rendered as terminal Markdown after the complete response arrives. CommonMark/GFM headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code, and tables receive terminal styling; JSONL keeps the original model text and deltas unchanged.
+
 ### 2.3 Interaction rules
 
 - Read-only, unambiguous steps may run immediately.
