@@ -58,4 +58,98 @@ describe("AuditStore", () => {
     created.push(root);
     await expect(new AuditStore(path.join(root, "missing.jsonl")).list()).resolves.toEqual([]);
   });
+
+  it("exports one task when given an unambiguous task ID prefix", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const first = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "first" });
+    const second = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "second" });
+    await store.taskStarted(first);
+    await store.taskFinished(first.taskId, true);
+    await store.taskStarted(second);
+
+    const output = path.join(root, "one-task.jsonl");
+    await expect(store.exportTo(output, { task: first.taskId.slice(0, 12) })).resolves.toEqual({ count: 2, taskId: first.taskId });
+    const records = (await readFile(output, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { taskId: string });
+    expect(records).toHaveLength(2);
+    expect(records.every((record) => record.taskId === first.taskId)).toBe(true);
+  });
+
+  it("refuses an ambiguous task ID prefix", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const first = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "first" }), taskId: "shared-first" };
+    const second = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "second" }), taskId: "shared-second" };
+    await store.taskStarted(first);
+    await store.taskStarted(second);
+    await expect(store.recordsForTask("shared")).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("exports every record in one chat session", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const sessionId = "chat-session-1";
+    const first = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "first" }), sessionId };
+    const second = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "second" }), sessionId };
+    await store.taskStarted(first);
+    await store.taskFinished(first.taskId, true);
+    await store.taskStarted(second);
+
+    const output = path.join(root, "session.jsonl");
+    await expect(store.exportTo(output, { session: "chat-session" })).resolves.toEqual({ count: 3, sessionId });
+    const records = (await readFile(output, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { sessionId?: string });
+    expect(records.every((record) => record.sessionId === sessionId)).toBe(true);
+  });
+
+  it("groups noisy streaming events into one task summary", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const first = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "first" });
+    const second = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "second" });
+    await store.taskStarted(first);
+    await store.agentEvent(first.taskId, { type: "tool_start", name: "list_files", summary: "list", riskLevel: "low" });
+    await store.agentEvent(first.taskId, { type: "assistant_delta", content: "one" });
+    await store.agentEvent(first.taskId, { type: "assistant_delta", content: "two" });
+    await store.taskFinished(first.taskId, true);
+    await store.taskStarted(second);
+    await store.taskFinished(second.taskId, false, "TOOL_FAILED");
+
+    const summaries = await store.listTaskSummaries();
+    expect(summaries).toEqual([
+      expect.objectContaining({ taskId: first.taskId, status: "completed", toolCalls: 1, eventCount: 5 }),
+      expect.objectContaining({ taskId: second.taskId, status: "failed", errorCode: "TOOL_FAILED", eventCount: 2 })
+    ]);
+    await expect(store.listTaskSummaries(1)).resolves.toEqual([
+      expect.objectContaining({ taskId: second.taskId })
+    ]);
+  });
+
+  it("exports an escaped standalone HTML report", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const context = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "html" });
+    await store.taskStarted(context);
+    await store.agentEvent(context.taskId, { type: "status", message: "<script>alert('unsafe')</script>" });
+    await store.agentEvent(context.taskId, { type: "assistant_delta", content: "one" });
+    await store.agentEvent(context.taskId, { type: "assistant_delta", content: "two" });
+    await store.taskFinished(context.taskId, true);
+
+    const output = path.join(root, "one-task.html");
+    await expect(store.exportTo(output, { task: context.taskId }, "html")).resolves.toEqual({ count: 5, taskId: context.taskId });
+    const html = await readFile(output, "utf8");
+    expect(html).toContain("<!doctype html>");
+    expect(html).toContain("任务摘要");
+    expect(html).toContain(context.taskId);
+    expect(html).toContain("合并 2 个片段");
+    expect(html).toContain("&lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt;");
+    expect(html).not.toContain("<script>alert('unsafe')</script>");
+  });
 });

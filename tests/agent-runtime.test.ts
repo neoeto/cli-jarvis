@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ import type { AgentMessage, ModelProvider, ModelRequest, ModelResponse } from ".
 import { ListFilesTool } from "../src/tools/builtins/list-files.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { PreparedAction, Tool, ToolContext, ToolResult } from "../src/tools/types.js";
+import type { ConfirmationHandler } from "../src/policy/engine.js";
 
 class FakeProvider implements ModelProvider {
   readonly id = "fake";
@@ -123,6 +125,39 @@ describe("AgentRuntime", () => {
     await expect(runtime.run("列出文件")).resolves.toBe("无法执行：参数无效");
   });
 
+  it("returns every invalid call from one model turn before asking the model to correct itself", async () => {
+    class MultipleInvalidProvider implements ModelProvider {
+      readonly id = "fake";
+      calls = 0;
+      lastMessages?: AgentMessage[];
+      async complete(request: ModelRequest): Promise<ModelResponse> {
+        this.calls += 1;
+        this.lastMessages = structuredClone(request.messages);
+        return this.calls === 1
+          ? {
+              kind: "tool_calls",
+              calls: ["one.txt", "two.txt", "three.txt"].map((file, index) => ({
+                id: `bad-${index}`,
+                name: "list_files",
+                arguments: JSON.stringify({ path: file })
+              }))
+            }
+          : { kind: "message", content: "Those are files; I should use read_file for their contents." };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    await Promise.all(["one.txt", "two.txt", "three.txt"].map((file) => writeFile(path.join(root, file), "test")));
+    const provider = new MultipleInvalidProvider();
+    const runtime = new AgentRuntime({
+      provider, model: "fake-model", registry: new ToolRegistry().register(new ListFilesTool()), workspaceRoot: root,
+      language: "en", maxToolCalls: 20, signal: new AbortController().signal
+    });
+    await expect(runtime.run("inspect files")).resolves.toContain("read_file");
+    expect(provider.calls).toBe(2);
+    expect(provider.lastMessages?.filter((message) => message.role === "tool")).toHaveLength(3);
+  });
+
   it("returns an unknown Tool error to the model for correction", async () => {
     class UnknownToolProvider implements ModelProvider {
       readonly id = "fake";
@@ -224,5 +259,55 @@ describe("AgentRuntime", () => {
       actionId: "approval1",
       approved: true
     });
+  });
+
+  it("can collect one explicit confirmation for a batch while authorizing every action", async () => {
+    let executed = 0;
+    const highRiskTool: Tool<Record<string, never>, { id: string }> = {
+      definition: { type: "function", function: { name: "batch_risk_test", description: "test", parameters: { type: "object" } } },
+      defaultRisk: "high",
+      possibleEffects: ["write"],
+      parse: () => ({}),
+      prepare: async (): Promise<PreparedAction<{ id: string }>> => ({
+        id: randomUUID(), toolName: "batch_risk_test", riskLevel: "high", summary: "Write test data", targets: [], effects: ["write"],
+        payload: { id: randomUUID() }, expiresAt: new Date(Date.now() + 60_000).toISOString()
+      }),
+      execute: async (): Promise<ToolResult> => {
+        executed += 1;
+        return { success: true, message: "done", effects: ["write"] };
+      }
+    };
+    class BatchProvider implements ModelProvider {
+      readonly id = "fake";
+      calls = 0;
+      async complete(): Promise<ModelResponse> {
+        this.calls += 1;
+        return this.calls === 1
+          ? { kind: "tool_calls", calls: [
+            { id: "batch-1", name: "batch_risk_test", arguments: "{}" },
+            { id: "batch-2", name: "batch_risk_test", arguments: "{}" }
+          ] }
+          : { kind: "message", content: "done" };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    let batchPrompts = 0;
+    const confirmation: ConfirmationHandler = Object.assign(async () => true, {
+      confirmBatch: async (requests: unknown[]) => {
+        batchPrompts += 1;
+        return requests.length === 2;
+      }
+    });
+    const events: AgentEvent[] = [];
+    const runtime = new AgentRuntime({
+      provider: new BatchProvider(), model: "fake", registry: new ToolRegistry().register(highRiskTool), workspaceRoot: root,
+      language: "en", maxToolCalls: 2, signal: new AbortController().signal, interactive: true, confirm: confirmation,
+      onEvent: (event) => events.push(event)
+    });
+    await expect(runtime.run("batch")).resolves.toBe("done");
+    expect(batchPrompts).toBe(1);
+    expect(executed).toBe(2);
+    expect(events).toContainEqual(expect.objectContaining({ type: "confirmation_batch_requested" }));
   });
 });

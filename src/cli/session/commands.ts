@@ -5,6 +5,9 @@ export type SessionCommand =
   | { kind: "status" }
   | { kind: "tools" }
   | { kind: "history" }
+  | { kind: "cancel" }
+  | { kind: "retry" }
+  | { kind: "last" }
   | { kind: "exit" }
   | { kind: "unknown"; name: string };
 
@@ -29,6 +32,12 @@ export function parseSessionInput(input: string): SessionCommand {
       return { kind: "tools" };
     case "history":
       return { kind: "history" };
+    case "cancel":
+      return { kind: "cancel" };
+    case "retry":
+      return { kind: "retry" };
+    case "last":
+      return { kind: "last" };
     case "exit":
     case "quit":
       return { kind: "exit" };

@@ -11,8 +11,14 @@ const inputSchema = z
 
 type TrashFilesInput = z.infer<typeof inputSchema>;
 
+interface TrashTarget {
+  path: string;
+  size: number;
+  modifiedMs: number;
+}
+
 interface TrashFilesPayload {
-  targets: string[];
+  targets: TrashTarget[];
 }
 
 export class TrashFilesTool implements Tool<TrashFilesInput, TrashFilesPayload> {
@@ -46,13 +52,13 @@ export class TrashFilesTool implements Tool<TrashFilesInput, TrashFilesPayload> 
   }
 
   async prepare(input: TrashFilesInput, context: ToolContext): Promise<PreparedAction<TrashFilesPayload>> {
-    const targets: string[] = [];
+    const targets: TrashTarget[] = [];
     let highRisk = false;
     for (const requested of [...new Set(input.paths)]) {
       const resolved = await resolveExistingPath(context.workspaceRoot, requested);
       const metadata = await lstat(resolved.path);
       highRisk ||= resolved.external || metadata.isDirectory() || resolved.path === resolved.workspaceRoot;
-      targets.push(resolved.path);
+      targets.push({ path: resolved.path, size: metadata.size, modifiedMs: metadata.mtimeMs });
     }
     return {
       id: randomUUID(),
@@ -61,9 +67,10 @@ export class TrashFilesTool implements Tool<TrashFilesInput, TrashFilesPayload> 
       summary: context.language === "zh-CN"
         ? `将 ${targets.length} 个条目移动到操作系统回收站`
         : `Move ${targets.length} item${targets.length === 1 ? "" : "s"} to the operating-system trash`,
-      targets,
+      targets: targets.map((target) => target.path),
       effects: ["trash", "move"],
       reversible: true,
+      recovery: { instruction: "Restore the item from the operating-system trash/recycle bin; cj does not claim it has been restored." },
       payload: { targets },
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     };
@@ -71,13 +78,20 @@ export class TrashFilesTool implements Tool<TrashFilesInput, TrashFilesPayload> 
 
   async execute(action: PreparedAction<TrashFilesPayload>, context: ToolContext): Promise<ToolResult> {
     if (context.signal.aborted) throw context.signal.reason;
-    await trash(action.payload.targets);
+    for (const target of action.payload.targets) {
+      const current = await lstat(target.path).catch(() => undefined);
+      if (!current || current.size !== target.size || current.mtimeMs !== target.modifiedMs) {
+        throw new Error(`Target changed after preview: ${target.path}`);
+      }
+    }
+    await trash(action.payload.targets.map((target) => target.path));
     return {
       success: true,
       message: context.language === "zh-CN"
         ? `已将 ${action.payload.targets.length} 个条目移动到回收站`
         : `Moved ${action.payload.targets.length} item${action.payload.targets.length === 1 ? "" : "s"} to trash`,
-      effects: action.payload.targets.map((target) => `Moved ${target} to trash`)
+      effects: action.payload.targets.map((target) => `Moved ${target.path} to trash`),
+      ...(action.recovery === undefined ? {} : { recovery: action.recovery })
     };
   }
 }

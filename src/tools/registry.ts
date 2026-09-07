@@ -4,11 +4,13 @@ import type { Tool } from "./types.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
+  private readonly origins = new Map<string, "builtin" | "local-extension">();
 
-  register(tool: Tool): this {
+  register(tool: Tool, origin: "builtin" | "local-extension" = "builtin"): this {
     const name = tool.definition.function.name;
     if (this.tools.has(name)) throw new Error(`Tool already registered: ${name}`);
     this.tools.set(name, tool);
+    this.origins.set(name, origin);
     return this;
   }
 
@@ -24,5 +26,9 @@ export class ToolRegistry {
 
   entries(): Tool[] {
     return [...this.tools.values()];
+  }
+
+  origin(name: string): "builtin" | "local-extension" | undefined {
+    return this.origins.get(name);
   }
 }

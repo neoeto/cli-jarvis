@@ -109,7 +109,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } catch (error) {
       if (error instanceof CjError) throw error;
       if (signal.aborted) throw new CjError("ABORTED", "Task aborted", { cause: error });
-      throw new CjError("PROVIDER_UNAVAILABLE", "DeepSeek request failed", { cause: error });
+      throw new CjError("PROVIDER_UNAVAILABLE", `${this.id} request failed`, { cause: error });
     }
   }
 }

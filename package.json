@@ -1,16 +1,24 @@
 {
   "name": "cli-jarvis",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A local, tool-using personal AI assistant for the command line",
   "type": "module",
   "bin": {
     "cj": "dist/cli/index.js"
   },
+  "exports": {
+    "./tools-sdk": {
+      "types": "./dist/tools/sdk.d.ts",
+      "default": "./dist/tools/sdk.js"
+    }
+  },
   "files": [
     "dist",
     "README.md",
     "DESIGN.md",
-    "ROADMAP.md"
+    "ROADMAP.md",
+    "CHANGELOG.md",
+    "completions"
   ],
   "engines": {
     "node": ">=20"

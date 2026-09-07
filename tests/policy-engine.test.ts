@@ -81,4 +81,10 @@ describe("PolicyEngine", () => {
       })
     ).rejects.toMatchObject({ code: "CONFIRMATION_REJECTED" });
   });
+
+  it("enforces configured workspace authorization roots", () => {
+    const policy = new PolicyEngine({ workspaceRoot: "/workspace", allowedRoots: ["/workspace/safe"] });
+    expect(() => policy.evaluate(action({ targets: ["/workspace/safe/file.txt"] }))).not.toThrow();
+    expect(() => policy.evaluate(action({ targets: ["/workspace/other/file.txt"] }))).toThrow(/authorized workspace roots/);
+  });
 });

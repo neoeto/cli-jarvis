@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -65,5 +65,19 @@ describe("ConfigStore", () => {
     }));
     expect(printable).toContain("********");
     expect(printable).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+  });
+
+  it("migrates a v1 single-provider configuration in memory without touching credentials", async () => {
+    const store = await temporaryStore();
+    await mkdir(path.dirname(store.paths.configFile), { recursive: true });
+    await writeFile(store.paths.configFile, JSON.stringify({
+      version: 1,
+      provider: { id: "legacy", baseURL: "https://example.test/v1", model: "legacy-model", thinking: false },
+      language: "en",
+      limits: { maxToolCalls: 5, taskTimeoutMs: 60_000 }
+    }));
+    const migrated = await store.loadConfig();
+    expect(migrated).toMatchObject({ version: 2, activeProfile: "default", provider: { id: "legacy", kind: "openai-compatible" } });
+    expect(migrated.profiles.default?.limits.modelTimeoutMs).toBe(60_000);
   });
 });

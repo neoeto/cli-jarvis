@@ -7,6 +7,18 @@ export interface ToolContext {
   workspaceRoot: string;
   signal: AbortSignal;
   language?: "zh-CN" | "en";
+  /** Bounded host-supplied limits. Tool implementations must not increase them. */
+  toolTimeoutMs?: number;
+  maxOutputBytes?: number;
+  /** Preview mode prepares and validates an action but never calls execute. */
+  dryRun?: boolean;
+}
+
+export interface RecoveryInfo {
+  /** A Tool-authored recovery hint. The host does not claim that recovery happened. */
+  instruction: string;
+  /** Optional opaque Tool snapshot identifier, never a credential or file body. */
+  snapshotId?: string;
 }
 
 export interface PreparedAction<P = unknown> {
@@ -17,6 +29,7 @@ export interface PreparedAction<P = unknown> {
   targets: string[];
   effects: EffectKind[];
   reversible?: boolean;
+  recovery?: RecoveryInfo;
   payload: P;
   expiresAt: string;
 }
@@ -26,6 +39,7 @@ export interface ToolResult<O = unknown> {
   message: string;
   effects: string[];
   data?: O;
+  recovery?: RecoveryInfo;
 }
 
 export interface Tool<I = unknown, P = unknown, O = unknown> {

@@ -113,6 +113,9 @@ export class MoveFilesTool implements Tool<MoveFilesInput, MoveFilesPayload> {
       targets: prepared.flatMap((item) => [item.source, item.destination]),
       effects: input.overwrite ? ["move", "delete"] : ["move"],
       reversible: !input.overwrite,
+      recovery: input.overwrite
+        ? { instruction: "Destination overwrite may have discarded data; restore it from a backup if needed." }
+        : { instruction: "Move each destination back to its original source only after checking that neither path changed." },
       payload: { moves: prepared, overwrite: input.overwrite },
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     };
@@ -142,7 +145,8 @@ export class MoveFilesTool implements Tool<MoveFilesInput, MoveFilesPayload> {
       message: context.language === "zh-CN"
         ? `已移动 ${action.payload.moves.length} 个条目`
         : `Moved ${action.payload.moves.length} item${action.payload.moves.length === 1 ? "" : "s"}`,
-      effects
+      effects,
+      ...(action.recovery === undefined ? {} : { recovery: action.recovery })
     };
   }
 }

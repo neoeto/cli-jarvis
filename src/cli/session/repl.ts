@@ -1,9 +1,11 @@
 import { asCjError, CjError } from "../../shared/errors.js";
+import type { TaskHistorySummary } from "../../audit/store.js";
 import type { SessionInput } from "./input.js";
 import { parseSessionInput, type SessionCommand } from "./commands.js";
 
 export interface ChatStatus {
   startedAt: string;
+  sessionId?: string;
   turns: number;
   contextMessages: number;
   provider: string;
@@ -14,11 +16,12 @@ export interface ChatStatus {
 export interface SessionHandlers {
   input: SessionInput;
   language: "zh-CN" | "en";
-  runPrompt: (prompt: string, signal: AbortSignal) => Promise<unknown>;
+  runPrompt: (prompt: string, signal: AbortSignal, retry?: boolean) => Promise<unknown>;
   clear: () => void;
   status: () => ChatStatus;
   tools: () => string;
   history: () => Promise<string>;
+  last: () => Promise<string>;
   write: (message: string) => void;
   reportError: (error: CjError) => void;
   prompt?: string;
@@ -26,8 +29,8 @@ export interface SessionHandlers {
 
 function helpText(language: "zh-CN" | "en"): string {
   return language === "zh-CN"
-    ? "输入问题开始对话。命令：/clear 清空上下文，/status 查看状态，/tools 查看工具，/history 查看历史，/exit 退出。"
-    : "Enter a prompt to start. Commands: /clear, /status, /tools, /history, /exit.";
+    ? "输入问题开始对话。命令：/clear、/status、/tools、/history、/last、/retry、/cancel、/exit。"
+    : "Enter a prompt to start. Commands: /clear, /status, /tools, /history, /last, /retry, /cancel, /exit.";
 }
 
 function formatStatus(status: ChatStatus, language: "zh-CN" | "en"): string {
@@ -35,6 +38,7 @@ function formatStatus(status: ChatStatus, language: "zh-CN" | "en"): string {
     return [
       "会话状态",
       `  开始时间: ${status.startedAt}`,
+      ...(status.sessionId ? [`  会话 ID: ${status.sessionId}`] : []),
       `  已完成轮次: ${status.turns}`,
       `  当前上下文消息: ${status.contextMessages}`,
       `  Provider: ${status.provider}`,
@@ -45,6 +49,7 @@ function formatStatus(status: ChatStatus, language: "zh-CN" | "en"): string {
   return [
     "Session status",
     `  Started: ${status.startedAt}`,
+    ...(status.sessionId ? [`  Session ID: ${status.sessionId}`] : []),
     `  Completed turns: ${status.turns}`,
     `  Context messages: ${status.contextMessages}`,
     `  Provider: ${status.provider}`,
@@ -65,6 +70,7 @@ export async function runInteractiveSession(options: SessionHandlers): Promise<v
   const prompt = options.prompt ?? "cj> ";
   let exiting = false;
   let activeTurn = false;
+  let lastPrompt: string | undefined;
   let cancelCurrentTurn: (() => void) | undefined;
   let interruptsForCurrentTurn = 0;
 
@@ -87,6 +93,22 @@ export async function runInteractiveSession(options: SessionHandlers): Promise<v
   });
 
   write(language === "zh-CN" ? `CJ 会话已启动。${helpText(language)}` : `CJ session started. ${helpText(language)}`);
+  const runTurn = async (promptText: string, retry = false): Promise<void> => {
+    activeTurn = true;
+    const controller = new AbortController();
+    cancelCurrentTurn = () => controller.abort(new Error("Interrupted"));
+    interruptsForCurrentTurn = 0;
+    try {
+      await options.runPrompt(promptText, controller.signal, retry);
+      lastPrompt = promptText;
+    } catch (error) {
+      options.reportError(asCjError(error));
+    } finally {
+      activeTurn = false;
+      cancelCurrentTurn = undefined;
+      interruptsForCurrentTurn = 0;
+    }
+  };
   try {
     while (!exiting) {
       const raw = await input.next(prompt);
@@ -112,6 +134,23 @@ export async function runInteractiveSession(options: SessionHandlers): Promise<v
             options.reportError(asCjError(error));
           }
           continue;
+        case "last":
+          try {
+            write(await options.last());
+          } catch (error) {
+            options.reportError(asCjError(error));
+          }
+          continue;
+        case "cancel":
+          write(language === "zh-CN" ? "当前没有运行中的任务；运行中任务请按 Ctrl+C 取消。" : "No task is currently running; press Ctrl+C to cancel a running task.");
+          continue;
+        case "retry":
+          if (!lastPrompt) {
+            write(language === "zh-CN" ? "没有可重试的已完成任务。" : "There is no completed task to retry.");
+            continue;
+          }
+          await runTurn(lastPrompt, true);
+          continue;
         case "exit":
           exiting = true;
           write(language === "zh-CN" ? "会话已退出。" : "Session closed.");
@@ -120,21 +159,7 @@ export async function runInteractiveSession(options: SessionHandlers): Promise<v
           write(unknownCommand(command, language));
           continue;
         case "prompt":
-          activeTurn = true;
-          {
-            const controller = new AbortController();
-            cancelCurrentTurn = () => controller.abort(new Error("Interrupted"));
-            interruptsForCurrentTurn = 0;
-            try {
-              await options.runPrompt(command.prompt, controller.signal);
-            } catch (error) {
-              options.reportError(asCjError(error));
-            } finally {
-              activeTurn = false;
-              cancelCurrentTurn = undefined;
-              interruptsForCurrentTurn = 0;
-            }
-          }
+          await runTurn(command.prompt);
           continue;
       }
     }
@@ -151,13 +176,33 @@ export function formatTools(tools: Array<{ name: string; risk: string; descripti
 }
 
 export function formatHistory(
-  records: Array<{ timestamp: string; taskId: string; event: string; data: Record<string, unknown> }>,
+  records: Array<{ timestamp: string; taskId: string; sessionId?: string; event: string; data: Record<string, unknown> }>,
   language: "zh-CN" | "en"
 ): string {
   if (records.length === 0) return language === "zh-CN" ? "暂无历史记录。" : "No history.";
   return records.map((record) => {
     const tool = typeof record.data.tool === "string" ? `  ${record.data.tool}` : "";
     const success = typeof record.data.success === "boolean" ? `  ${record.data.success ? "ok" : "failed"}` : "";
-    return `${record.timestamp}  ${record.taskId.slice(0, 8)}  ${record.event}${tool}${success}`;
+    const session = record.sessionId ? `  session:${record.sessionId.slice(0, 8)}` : "";
+    return `${record.timestamp}  ${record.taskId.slice(0, 8)}${session}  ${record.event}${tool}${success}`;
+  }).join("\n");
+}
+
+export function formatTaskHistory(
+  summaries: TaskHistorySummary[],
+  language: "zh-CN" | "en"
+): string {
+  if (summaries.length === 0) return language === "zh-CN" ? "暂无历史记录。" : "No history.";
+  return summaries.map((summary) => {
+    const session = summary.sessionId ? `  session:${summary.sessionId.slice(0, 8)}` : "";
+    const duration = summary.durationMs === undefined
+      ? "-"
+      : summary.durationMs < 1_000
+        ? `${summary.durationMs}ms`
+        : `${(summary.durationMs / 1_000).toFixed(summary.durationMs < 10_000 ? 1 : 0)}s`;
+    const status = language === "zh-CN"
+      ? summary.status === "completed" ? "完成" : summary.status === "failed" ? "失败" : summary.status === "cancelled" ? "已取消" : "未完成"
+      : summary.status;
+    return `${summary.startedAt}  ${summary.taskId.slice(0, 8)}${session}  ${status}  tools:${summary.toolCalls}  events:${summary.eventCount}  ${duration}${summary.errorCode ? `  ${summary.errorCode}` : ""}`;
   }).join("\n");
 }

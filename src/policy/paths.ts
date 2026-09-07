@@ -46,3 +46,26 @@ export async function resolveAuthorizedExistingPath(workspaceRoot: string, reque
   }
   return resolved.path;
 }
+
+/** Resolve configured roots once per task. Absolute roots and `..` never extend the host workspace ceiling. */
+export async function resolveAllowedRoots(workspaceRoot: string, configuredRoots: string[]): Promise<string[]> {
+  const realRoot = await realpath(workspaceRoot);
+  const roots: string[] = [];
+  for (const requested of configuredRoots) {
+    const candidate = path.resolve(realRoot, requested);
+    if (!isPathWithin(realRoot, candidate)) {
+      throw new CjError("PATH_NOT_AUTHORIZED", `Configured root is outside the workspace: ${requested}`);
+    }
+    let resolved: string;
+    try {
+      resolved = await realpath(candidate);
+    } catch (error) {
+      throw new CjError("CONFIG_INVALID", `Configured authorization root does not exist: ${requested}`, { cause: error });
+    }
+    if (!isPathWithin(realRoot, resolved)) {
+      throw new CjError("PATH_NOT_AUTHORIZED", `Configured root resolves outside the workspace: ${requested}`);
+    }
+    roots.push(resolved);
+  }
+  return [...new Set(roots)];
+}

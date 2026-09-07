@@ -7,6 +7,7 @@ import {
   authConfigSchema,
   defaultConfig,
   emptyAuthConfig,
+  migrateLegacyConfig,
   type AppConfig,
   type AuthConfig
 } from "./schema.js";
@@ -45,14 +46,27 @@ export class ConfigStore {
     const raw = await readJson(this.paths.configFile);
     if (raw === undefined) return defaultConfig;
     const result = appConfigSchema.safeParse(raw);
-    if (!result.success) {
-      throw new CjError("CONFIG_INVALID", `Invalid config: ${result.error.message}`);
-    }
-    return result.data;
+    if (result.success) return result.data;
+    const migrated = migrateLegacyConfig(raw);
+    if (!migrated) throw new CjError("CONFIG_INVALID", `Invalid config: ${result.error.message}`);
+    // Migrate in memory first. Read-only commands (doctor, list, tools) must
+    // not mutate a user's configuration merely by inspecting it; the next
+    // explicit configuration save persists the v2 form atomically.
+    return migrated;
   }
 
   async saveConfig(config: AppConfig): Promise<void> {
-    await atomicWriteJson(this.paths.configFile, appConfigSchema.parse(config));
+    const parsed = appConfigSchema.parse(config);
+    // `provider` and `limits` are retained as a backwards-compatible active
+    // profile view. Keep the view and the selected profile atomic on writes.
+    const normalized: AppConfig = {
+      ...parsed,
+      profiles: {
+        ...parsed.profiles,
+        [parsed.activeProfile]: { provider: parsed.provider, limits: parsed.limits }
+      }
+    };
+    await atomicWriteJson(this.paths.configFile, normalized);
   }
 
   async loadAuth(): Promise<AuthConfig> {

@@ -114,7 +114,8 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFilePayload, ReadFi
     context: ToolContext
   ): Promise<ToolResult<ReadFileData>> {
     if (context.signal.aborted) throw context.signal.reason;
-    const { data, truncated: byteTruncated } = await readBounded(action.payload.target, action.payload.maxBytes);
+    const maximum = Math.min(action.payload.maxBytes, context.maxOutputBytes ?? action.payload.maxBytes);
+    const { data, truncated: byteTruncated } = await readBounded(action.payload.target, maximum);
     if (data.includes(0)) throw new CjError("TOOL_FAILED", `Binary file is not supported: ${action.payload.path}`);
     const decoded = data.toString("utf8");
     const lines = decoded.split(/\r?\n/);

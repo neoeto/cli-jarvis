@@ -2,6 +2,7 @@ import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import type { ConfigStore } from "../../config/store.js";
 import { printableConfig } from "../../config/redact.js";
+import { CjError } from "../../shared/errors.js";
 
 export function addConfigCommand(program: Command, store: ConfigStore): void {
   const command = program.command("config").description("Configure the LLM provider");
@@ -43,9 +44,10 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
           })
         };
 
+    const providerConfig = { id: provider, baseURL, model, thinking: false, kind: provider === "deepseek" ? "deepseek" as const : "openai-compatible" as const };
     await store.saveConfig({
       ...current,
-      provider: { id: provider, baseURL, model, thinking: false },
+      provider: providerConfig,
       language
     });
     await store.saveAuth({
@@ -61,4 +63,124 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
     .action(async () => {
       process.stdout.write(`${JSON.stringify(printableConfig(await store.loadConfig(), await store.loadAuth()), null, 2)}\n`);
     });
+
+  const profile = command.command("profile").description("Manage named provider profiles");
+  profile.command("list").description("List configured profiles").action(async () => {
+    const config = await store.loadConfig();
+    for (const [name, value] of Object.entries(config.profiles).sort(([left], [right]) => left.localeCompare(right))) {
+      process.stdout.write(`${name}${name === config.activeProfile ? " *" : ""}\t${value.provider.id}\t${value.provider.model}\t${value.provider.baseURL}\n`);
+    }
+  });
+
+  profile.command("use").argument("<name>").description("Select the active profile").action(async (name: string) => {
+    const config = await store.loadConfig();
+    const selected = config.profiles[name];
+    if (!selected) throw new CjError("CONFIG_INVALID", `Unknown profile: ${name}`);
+    await store.saveConfig({ ...config, activeProfile: name, provider: selected.provider, limits: selected.limits });
+    process.stdout.write(`Active profile: ${name}\n`);
+  });
+
+  profile
+    .command("add")
+    .argument("<name>")
+    .description("Add or replace a profile. Credentials must be configured separately; API keys are never command arguments.")
+    .requiredOption("--provider <id>", "provider identifier")
+    .requiredOption("--base-url <url>", "OpenAI-compatible base URL")
+    .requiredOption("--model <model>", "model identifier")
+    .option("--kind <kind>", "deepseek or openai-compatible", "openai-compatible")
+    .option("--thinking", "enable DeepSeek thinking")
+    .option("--max-tool-calls <number>", "maximum tool calls")
+    .option("--task-timeout <ms>", "overall task timeout in milliseconds")
+    .action(async (name: string, options: {
+      provider: string; baseUrl: string; model: string; kind: string; thinking?: boolean; maxToolCalls?: string; taskTimeout?: string;
+    }) => {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) throw new CjError("CONFIG_INVALID", "Invalid profile name");
+      if (options.kind !== "deepseek" && options.kind !== "openai-compatible") {
+        throw new CjError("CONFIG_INVALID", "kind must be deepseek or openai-compatible");
+      }
+      const config = await store.loadConfig();
+      const base = config.profiles[name]?.limits ?? config.limits;
+      const maxToolCalls = options.maxToolCalls === undefined ? base.maxToolCalls : Number(options.maxToolCalls);
+      const taskTimeoutMs = options.taskTimeout === undefined ? base.taskTimeoutMs : Number(options.taskTimeout);
+      if (!Number.isInteger(maxToolCalls) || !Number.isInteger(taskTimeoutMs)) {
+        throw new CjError("CONFIG_INVALID", "Profile limits must be integers");
+      }
+      const limits = { ...base, maxToolCalls, taskTimeoutMs, modelTimeoutMs: Math.min(base.modelTimeoutMs, taskTimeoutMs) };
+      const provider = {
+        id: options.provider,
+        baseURL: options.baseUrl,
+        model: options.model,
+        thinking: options.thinking ?? false,
+        kind: options.kind as "deepseek" | "openai-compatible"
+      };
+      // Validate through the shared config schema before persisting.
+      await store.saveConfig({
+        ...config,
+        profiles: { ...config.profiles, [name]: { provider, limits } },
+        ...(name === config.activeProfile ? { provider, limits } : {})
+      });
+      process.stdout.write(`Profile saved: ${name}\n`);
+    });
+
+  profile.command("remove").argument("<name>").description("Remove a non-active profile").action(async (name: string) => {
+    const config = await store.loadConfig();
+    if (!config.profiles[name]) throw new CjError("CONFIG_INVALID", `Unknown profile: ${name}`);
+    if (name === config.activeProfile) throw new CjError("CONFIG_INVALID", "Cannot remove the active profile; use another profile first");
+    const { [name]: _removed, ...profiles } = config.profiles;
+    await store.saveConfig({ ...config, profiles });
+    process.stdout.write(`Profile removed: ${name}\n`);
+  });
+
+  command
+    .command("roots")
+    .description("Show or set workspace-relative directory authorization roots")
+    .argument("[roots...]", "one or more relative roots")
+    .action(async (roots: string[]) => {
+      const config = await store.loadConfig();
+      if (roots.length === 0) {
+        process.stdout.write(`${config.security.allowedRoots.join("\n")}\n`);
+        return;
+      }
+      if (roots.some((root) => root.startsWith("/") || root === ".." || root.startsWith("../") || root.startsWith("..\\"))) {
+        throw new CjError("CONFIG_INVALID", "Authorization roots must be workspace-relative and cannot escape the workspace");
+      }
+      await store.saveConfig({ ...config, security: { allowedRoots: [...new Set(roots)] } });
+      process.stdout.write("Authorization roots saved.\n");
+    });
+
+  const plugin = command.command("plugin").description("Enable or disable opt-in local Tool extensions");
+  plugin.command("list").action(async () => {
+    const config = await store.loadConfig();
+    for (const name of config.plugins.enabled) process.stdout.write(`${name}\n`);
+  });
+  plugin.command("enable").argument("<name>").action(async (name: string) => {
+    const config = await store.loadConfig();
+    await store.saveConfig({ ...config, plugins: { enabled: [...new Set([...config.plugins.enabled, name])] } });
+    process.stdout.write(`Enabled local Tool extension: ${name}\n`);
+  });
+  plugin.command("disable").argument("<name>").action(async (name: string) => {
+    const config = await store.loadConfig();
+    await store.saveConfig({ ...config, plugins: { enabled: config.plugins.enabled.filter((item) => item !== name) } });
+    process.stdout.write(`Disabled local Tool extension: ${name}\n`);
+  });
+
+  const credential = command.command("credential").description("Manage non-secret credential references");
+  credential
+    .command("set-env")
+    .argument("<provider>")
+    .argument("<variable>")
+    .description("Use an environment variable for a provider; command-line literal API keys are never accepted")
+    .action(async (provider: string, variable: string) => {
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(variable)) throw new CjError("CONFIG_INVALID", "Use an uppercase environment variable name");
+      const auth = await store.loadAuth();
+      await store.saveAuth({ ...auth, providers: { ...auth.providers, [provider]: { type: "env", variable } } });
+      process.stdout.write(`Credential reference saved for ${provider}.\n`);
+    });
+  credential.command("remove").argument("<provider>").description("Remove a stored credential reference").action(async (provider: string) => {
+    const auth = await store.loadAuth();
+    if (!auth.providers[provider]) throw new CjError("CONFIG_INVALID", `No credentials configured for ${provider}`);
+    const { [provider]: _removed, ...providers } = auth.providers;
+    await store.saveAuth({ ...auth, providers });
+    process.stdout.write(`Credential reference removed for ${provider}.\n`);
+  });
 }

@@ -127,7 +127,8 @@ export class RunCommandTool implements Tool<RunCommandInput, RunCommandPayload, 
       cwd: action.payload.resolvedCwd,
       env: minimalProcessEnvironment(action.payload.environment),
       timeoutMs: action.payload.timeoutMs,
-      signal: context.signal
+      signal: context.signal,
+      ...(context.maxOutputBytes === undefined ? {} : { maxOutputBytes: context.maxOutputBytes })
     });
     const stdout = action.payload.allowSensitiveOutput
       ? { value: result.stdout, redactions: 0 }
@@ -151,7 +152,8 @@ export class RunCommandTool implements Tool<RunCommandInput, RunCommandPayload, 
         stdout: stdout.value,
         stderr: stderr.value,
         redactions
-      }
+      },
+      ...(action.recovery === undefined ? {} : { recovery: action.recovery })
     };
   }
 }

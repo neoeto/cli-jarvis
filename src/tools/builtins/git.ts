@@ -137,8 +137,9 @@ export class GitTool implements Tool<GitInput, GitPayload, GitData> {
       args: action.payload.args,
       cwd: action.payload.cwd,
       env: minimalProcessEnvironment({ GIT_TERMINAL_PROMPT: "0" }),
-      timeoutMs: 60_000,
-      signal: context.signal
+      timeoutMs: context.toolTimeoutMs ?? 60_000,
+      signal: context.signal,
+      ...(context.maxOutputBytes === undefined ? {} : { maxOutputBytes: context.maxOutputBytes })
     });
     const stdout = redactSecrets(result.stdout);
     const stderr = redactSecrets(result.stderr);
@@ -154,7 +155,8 @@ export class GitTool implements Tool<GitInput, GitPayload, GitData> {
         stderr: stderr.value,
         truncated: result.truncated,
         redactions: stdout.redactions + stderr.redactions
-      }
+      },
+      ...(action.recovery === undefined ? {} : { recovery: action.recovery })
     };
   }
 }

@@ -63,6 +63,19 @@ function confirmationPanel(
   ].join("\n");
 }
 
+function batchConfirmationPanel(
+  requests: Extract<AgentEvent, { type: "confirmation_batch_requested" }>["requests"],
+  language: "zh-CN" | "en",
+  colors: Colors
+): string {
+  const title = language === "zh-CN" ? `⚠ 需要确认（${requests.length} 个操作）` : `⚠ Confirmation required (${requests.length} operations)`;
+  const rows = requests.flatMap((request, index) => [
+    `${index + 1}. ${request.toolName}: ${request.summary}`,
+    ...(request.targets.length ? [`   ${language === "zh-CN" ? "目标" : "targets"}: ${request.targets.join(", ")}`] : [])
+  ]);
+  return `${colors.yellow(title)}\n${rows.map((row) => `  ${row}`).join("\n")}`;
+}
+
 export function createHumanRenderer(options: {
   verbose: boolean;
   language: "zh-CN" | "en";
@@ -70,19 +83,50 @@ export function createHumanRenderer(options: {
   noColor?: boolean;
 }): EventSink {
   const colors = pc.createColors(pc.isColorSupported && !(options.plain || options.noColor));
+  let streamedMarkdown = "";
+  let sawStreamDelta = false;
+  const flushStream = (final = false): void => {
+    if (!streamedMarkdown) return;
+    const fences = (streamedMarkdown.match(/(^|\n)\s*```/g) ?? []).length;
+    // Do not render an unfinished fenced block. Rendering only completed
+    // paragraph blocks also avoids repeatedly repainting Markdown syntax.
+    const paragraphBreak = streamedMarkdown.lastIndexOf("\n\n");
+    const lastBreak = final && fences % 2 === 0
+      ? streamedMarkdown.length
+      : fences % 2 === 0 && paragraphBreak >= 0
+        ? paragraphBreak + 2
+        : 0;
+    if (lastBreak <= 0) return;
+    const safe = streamedMarkdown.slice(0, lastBreak);
+    streamedMarkdown = streamedMarkdown.slice(lastBreak);
+    const rendered = renderMarkdown(safe, colors);
+    if (rendered) process.stdout.write(`${rendered}\n`);
+  };
   return (event: AgentEvent) => {
     switch (event.type) {
       case "status":
         process.stderr.write(`${colors.dim(event.message)}\n`);
         break;
+      case "task_status":
+        if (options.verbose) process.stderr.write(`${colors.dim(`[${event.taskId.slice(0, 8)}] ${event.status}${event.detail ? `: ${event.detail}` : ""}`)}\n`);
+        break;
+      case "task_step":
+        if (options.verbose) process.stderr.write(`${colors.dim(`[${event.taskId.slice(0, 8)}] ${event.stepId} ${event.status}${event.dependsOn.length ? ` ← ${event.dependsOn.join(", ")}` : ""}${event.detail ? `: ${event.detail}` : ""}`)}\n`);
+        break;
       case "tool_start":
         process.stderr.write(`${colors.cyan("→")} ${colors.bold(event.name)}: ${event.summary}\n`);
+        break;
+      case "tool_preview":
+        process.stderr.write(`${colors.cyan("◇")} ${colors.bold(event.name)}: ${event.summary} ${colors.dim(options.language === "zh-CN" ? "(预览)" : "(preview)")}\n`);
         break;
       case "tool_result":
         process.stderr.write(`${event.success ? colors.green("✓") : colors.red("✗")} ${event.message} ${colors.dim(`(${event.durationMs}ms)`)}\n`);
         if (options.verbose && event.data !== undefined) {
           const serialized = redactSecrets(JSON.stringify(event.data, null, 2)).value;
           process.stderr.write(`${colors.dim(serialized)}\n`);
+        }
+        if (event.recovery) {
+          process.stderr.write(`${colors.dim(options.language === "zh-CN" ? `恢复提示：${event.recovery.instruction}` : `Recovery hint: ${event.recovery.instruction}`)}\n`);
         }
         break;
       case "confirmation_requested": {
@@ -93,11 +137,34 @@ export function createHumanRenderer(options: {
       case "confirmation_resolved":
         process.stderr.write(`${event.approved ? colors.green(options.language === "zh-CN" ? "✓ 已批准" : "✓ Approved") : colors.red(options.language === "zh-CN" ? "✗ 未批准" : "✗ Not approved")}\n`);
         break;
+      case "confirmation_batch_requested":
+        process.stderr.write(`${batchConfirmationPanel(event.requests, options.language, colors)}\n`);
+        break;
+      case "confirmation_batch_resolved":
+        process.stderr.write(`${event.approved ? colors.green(options.language === "zh-CN" ? `✓ 已批准 ${event.actionIds.length} 个操作` : `✓ Approved ${event.actionIds.length} operations`) : colors.red(options.language === "zh-CN" ? "✗ 未批准操作批次" : "✗ Operation batch not approved")}\n`);
+        break;
       case "assistant_delta":
-        // Markdown is rendered after the complete assistant message arrives.
+        sawStreamDelta = true;
+        streamedMarkdown += event.content;
+        flushStream();
         break;
       case "assistant":
-        process.stdout.write(`${renderMarkdown(event.content, colors)}\n`);
+        if (sawStreamDelta && event.streamed) {
+          // Providers return both deltas and a complete string. Only flush the
+          // unrendered suffix so users never see a duplicated answer.
+          flushStream(true);
+          if (streamedMarkdown) {
+            process.stdout.write(`${renderMarkdown(streamedMarkdown, colors)}\n`);
+            streamedMarkdown = "";
+          }
+        } else {
+          process.stdout.write(`${renderMarkdown(event.content, colors)}\n`);
+        }
+        sawStreamDelta = false;
+        streamedMarkdown = "";
+        break;
+      case "memory_used":
+        process.stderr.write(`${colors.dim(options.language === "zh-CN" ? `使用了 ${event.ids.length} 条本地记忆：${event.purpose}` : `Used ${event.ids.length} local memory fact(s): ${event.purpose}`)}\n`);
         break;
     }
   };

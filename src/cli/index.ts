@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { realpath } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Command } from "commander";
 import pc from "picocolors";
 import { AgentRuntime } from "../agent/runtime.js";
+import type { EventSink } from "../agent/events.js";
 import type { AgentMessage } from "../providers/types.js";
 import { addConfigCommand } from "./commands/config.js";
 import { addToolsCommand } from "./commands/tools.js";
 import { ConfigStore } from "../config/store.js";
 import type { AppConfig } from "../config/schema.js";
-import { createDeepSeekProvider } from "../providers/deepseek.js";
+import { createProvider } from "../providers/deepseek.js";
 import { asCjError, CjError } from "../shared/errors.js";
 import { ListFilesTool } from "../tools/builtins/list-files.js";
 import { SearchFilesTool } from "../tools/builtins/search-files.js";
@@ -26,12 +27,18 @@ import { createTerminalConfirmation } from "./confirmation.js";
 import { AuditStore } from "../audit/store.js";
 import { addHistoryCommand } from "./commands/history.js";
 import { createReadlineSessionInput } from "./session/input.js";
-import { formatHistory, formatTools, runInteractiveSession } from "./session/repl.js";
+import { formatTaskHistory, formatTools, runInteractiveSession } from "./session/repl.js";
+import { MemoryStore } from "../memory/store.js";
+import { addMemoryCommand } from "./commands/memory.js";
+import { resolveAllowedRoots } from "../policy/paths.js";
+import { PolicyEngine } from "../policy/engine.js";
+import { discoverLocalTools } from "../tools/extensions.js";
 
-const CLI_VERSION = "0.1.0";
+const CLI_VERSION = "1.0.0";
 const program = new Command();
 const store = new ConfigStore();
 const audit = new AuditStore(store.paths.historyFile);
+const memoryStore = new MemoryStore(store.paths.memoryFile);
 const registry = new ToolRegistry()
   .register(new ListFilesTool())
   .register(new SearchFilesTool())
@@ -49,6 +56,9 @@ interface CliOptions {
   timeout?: string;
   plain?: boolean;
   color?: boolean;
+  dryRun?: boolean;
+  taskEvents?: boolean;
+  profile?: string;
 }
 
 interface ExecuteTaskOptions {
@@ -64,8 +74,37 @@ interface ExecuteTaskOptions {
   verbose: boolean;
   plain: boolean;
   noColor: boolean;
+  dryRun?: boolean;
+  taskEvents?: boolean;
   messages?: AgentMessage[];
   isTimedOut?: () => boolean;
+  maxToolCalls?: number;
+  onToolExecuted?: () => void;
+  sessionId?: string;
+}
+
+const loadedPlugins = new Set<string>();
+
+async function configureExtensions(config: AppConfig): Promise<void> {
+  const requested = config.plugins.enabled.filter((name) => !loadedPlugins.has(name));
+  if (!requested.length) return;
+  const results = await discoverLocalTools(registry, store.paths.toolsDir, requested);
+  for (const result of results) {
+    if (result.ok && result.enabled && result.name && result.message === "Loaded") loadedPlugins.add(result.name);
+  }
+  const failures = results.filter((result) => result.enabled && !result.ok);
+  const found = new Set(results.map((result) => result.name).filter((name): name is string => Boolean(name)));
+  const missing = requested.filter((name) => !found.has(name));
+  if (failures.length || missing.length) {
+    throw new CjError("CONFIG_INVALID", `Unable to load enabled Tool extension(s): ${[...failures.map((item) => item.name ?? item.directory), ...missing].join(", ")}`);
+  }
+}
+
+function selectProfile(config: AppConfig, name: string | undefined): AppConfig {
+  if (!name || name === config.activeProfile) return config;
+  const profile = config.profiles[name];
+  if (!profile) throw new CjError("CONFIG_INVALID", `Unknown profile: ${name}`);
+  return { ...config, activeProfile: name, provider: profile.provider, limits: profile.limits };
 }
 
 function parseDuration(value: string): number {
@@ -93,32 +132,48 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
     cwd: options.workspaceRoot,
     provider: options.config.provider.id,
     model: options.config.provider.model,
-    promptHash: createHash("sha256").update(options.prompt).digest("hex")
+    promptHash: createHash("sha256").update(options.prompt).digest("hex"),
+    ...(options.sessionId ? { sessionId: options.sessionId } : {})
   });
   await audit.taskStarted(auditContext);
+  await audit.agentEvent(auditContext.taskId, { type: "task_status", taskId: auditContext.taskId, status: "queued" });
+  let render: EventSink | undefined;
 
   try {
+    await configureExtensions(options.config);
+    const allowedRoots = await resolveAllowedRoots(options.workspaceRoot, options.config.security.allowedRoots);
+    const memoryFacts = options.config.memory.enabled ? await memoryStore.list() : [];
     const renderer = options.json
       ? jsonlRenderer
       : createHumanRenderer({
-          verbose: options.verbose,
+          verbose: options.verbose || options.taskEvents === true,
           language: options.language,
           plain: options.plain,
           noColor: options.noColor
         });
+    render = renderer;
     const runtime = new AgentRuntime({
-      provider: createDeepSeekProvider(options.config, options.apiKey),
+      provider: createProvider(options.config, options.apiKey),
       model: options.config.provider.model,
       registry,
       workspaceRoot: options.workspaceRoot,
       language: options.language,
-      maxToolCalls: options.config.limits.maxToolCalls,
+      maxToolCalls: options.maxToolCalls ?? options.config.limits.maxToolCalls,
+      modelTimeoutMs: options.config.limits.modelTimeoutMs,
+      toolTimeoutMs: options.config.limits.toolTimeoutMs,
+      maxOutputBytes: options.config.limits.maxOutputBytes,
+      taskId: auditContext.taskId,
+      emitLifecycle: true,
+      ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+      memoryFacts,
+      ...(options.onToolExecuted === undefined ? {} : { onToolExecuted: options.onToolExecuted }),
       signal: options.signal,
       ...(options.messages ? { messages: options.messages } : {}),
       interactive: options.interactive,
       confirm: createTerminalConfirmation(options.language),
+      policy: new PolicyEngine({ workspaceRoot: options.workspaceRoot, allowedRoots }),
       onEvent: async (event) => {
-        await renderer(event);
+        if ((event.type !== "task_status" && event.type !== "task_step") || options.taskEvents) await renderer(event);
         await audit.agentEvent(auditContext.taskId, event);
       }
     });
@@ -129,6 +184,14 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
     const normalized = options.isTimedOut?.()
       ? new CjError("LIMIT_EXCEEDED", `Task exceeded timeout of ${options.timeoutMs}ms`, { cause: error })
       : asCjError(error);
+    const statusEvent = {
+      type: "task_status",
+      taskId: auditContext.taskId,
+      status: normalized.code === "ABORTED" ? "cancelled" : "failed",
+      detail: normalized.code
+    } as const;
+    if (options.taskEvents && render) await render(statusEvent);
+    await audit.agentEvent(auditContext.taskId, statusEvent);
     await audit.taskFinished(auditContext.taskId, false, normalized.code);
     throw normalized;
   }
@@ -163,6 +226,9 @@ program
   .option("--timeout <duration>", "lower the task timeout, for example 30s or 2m")
   .option("--plain", "use plain terminal output")
   .option("--no-color", "disable terminal colors")
+  .option("--dry-run", "preview prepared Tool actions without executing them")
+  .option("--task-events", "emit task lifecycle events (including in JSONL mode)")
+  .option("--profile <name>", "use a configured profile for this invocation without changing the default")
   .argument("[prompt...]", "natural-language task")
   .action(async (
     words: string[],
@@ -173,7 +239,7 @@ program
       return;
     }
 
-    const config = await store.loadConfig();
+    const config = selectProfile(await store.loadConfig(), options.profile);
     const language = options.language ?? config.language;
     if (language !== "zh-CN" && language !== "en") {
       throw new CjError("CONFIG_INVALID", `Unsupported language: ${language}`);
@@ -199,6 +265,8 @@ program
         verbose: options.verbose ?? false,
         plain: options.plain ?? false,
         noColor: options.color === false,
+        dryRun: options.dryRun ?? false,
+        taskEvents: options.taskEvents ?? false,
         interactive: !options.json && Boolean(
           process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY
         )
@@ -217,7 +285,7 @@ program
       throw new CjError("CONFIG_INVALID", "cj chat requires an interactive TTY");
     }
 
-    const config = await store.loadConfig();
+    const config = selectProfile(await store.loadConfig(), options.profile);
     const language = options.language ?? config.language;
     if (language !== "zh-CN" && language !== "en") {
       throw new CjError("CONFIG_INVALID", `Unsupported language: ${language}`);
@@ -227,7 +295,10 @@ program
     const workspaceRoot = await realpath(process.cwd());
     const transcript: AgentMessage[] = [];
     const startedAt = new Date().toISOString();
+    const sessionId = randomUUID();
     let turns = 0;
+    let retryPrompt: string | undefined;
+    let retryToolCalls = 0;
     const input = createReadlineSessionInput(process.stdin, process.stderr);
     const sessionColors = pc.createColors(pc.isColorSupported && !(options.plain || options.color === false));
     const write = (message: string): void => {
@@ -238,7 +309,15 @@ program
       input,
       language,
       write,
-      runPrompt: async (prompt, signal) => {
+      runPrompt: async (prompt, signal, retry = false) => {
+        if (!retry || prompt !== retryPrompt) {
+          retryPrompt = prompt;
+          retryToolCalls = 0;
+        }
+        const remainingToolCalls = config.limits.maxToolCalls - retryToolCalls;
+        if (remainingToolCalls < 1) {
+          throw new CjError("LIMIT_EXCEEDED", `Maximum Tool call count (${config.limits.maxToolCalls}) already used by this task and its retries`);
+        }
         const draft = transcript.slice();
         const controller = new AbortController();
         const forwardAbort = (): void => controller.abort(signal.reason);
@@ -257,6 +336,11 @@ program
             verbose: options.verbose ?? false,
             plain: options.plain ?? false,
             noColor: options.color === false,
+            dryRun: options.dryRun ?? false,
+            taskEvents: options.taskEvents ?? false,
+            maxToolCalls: remainingToolCalls,
+            onToolExecuted: () => { retryToolCalls += 1; },
+            sessionId,
             interactive: true,
             messages: draft
           });
@@ -271,6 +355,7 @@ program
       },
       status: () => ({
         startedAt,
+        sessionId,
         turns,
         contextMessages: transcript.length,
         provider: config.provider.id,
@@ -285,7 +370,11 @@ program
         })),
         language
       ),
-      history: async () => formatHistory(await audit.list(50), language),
+      history: async () => formatTaskHistory(await audit.listTaskSummaries(50), language),
+      last: async () => {
+        const records = await audit.list(1);
+        return records.length ? formatTaskHistory(await audit.listTaskSummaries(1), language) : (language === "zh-CN" ? "暂无历史记录。" : "No history.");
+      },
       reportError: (error) => {
         process.stderr.write(`${sessionColors.red("Error")} [${error.code}] ${error.message}\n`);
       }
@@ -293,15 +382,33 @@ program
   });
 
 addConfigCommand(program, store);
-addToolsCommand(program, registry);
+addToolsCommand(program, registry, store);
 addHistoryCommand(program, audit);
+addMemoryCommand(program, store, memoryStore);
+
+program
+  .command("version")
+  .description("Show version and local diagnostic paths without reading credentials")
+  .option("--diagnose", "also validate configuration and local store permissions")
+  .action(async (options: { diagnose?: boolean }) => {
+    process.stdout.write(`cj ${CLI_VERSION}\nnode ${process.version}\nplatform ${process.platform}/${process.arch}\n`);
+    if (!options.diagnose) return;
+    const config = await store.loadConfig();
+    process.stdout.write(`config ${store.paths.configFile}\nhistory ${store.paths.historyFile}\nactive profile ${config.activeProfile}\n`);
+    // loadAuth validates permission bits while keeping any credential value out
+    // of the output. Memory is optional, so an absent file is valid.
+    await store.loadAuth();
+    await memoryStore.list();
+    process.stdout.write(`${pc.green("✓")} local configuration stores are readable and protected\n`);
+  });
 
 program
   .command("doctor")
   .description("Validate configuration, credentials, and provider access")
   .option("--offline", "skip the provider connectivity check")
-  .action(async (options: { offline?: boolean }) => {
-    const config = await store.loadConfig();
+  .option("--profile <name>", "profile to check")
+  .action(async (options: { offline?: boolean; profile?: string }) => {
+    const config = selectProfile(await store.loadConfig(), options.profile);
     const apiKey = await store.resolveApiKey(config.provider.id);
     const zh = config.language === "zh-CN";
     process.stdout.write(`${pc.green("✓")} ${zh ? "配置和凭据可用" : "Configuration and credentials are available"}\n`);
@@ -310,7 +417,7 @@ program
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(new Error("Doctor timeout")), 15_000);
       try {
-        const response = await createDeepSeekProvider(config, apiKey).complete(
+        const response = await createProvider(config, apiKey).complete(
           {
             model: config.provider.model,
             messages: [{ role: "user", content: "Reply with exactly OK." }],

@@ -104,6 +104,9 @@ export class WriteFileTool implements Tool<WriteFileInput, WriteFilePayload> {
       targets: [target],
       effects: ["write"],
       reversible: input.operation !== "overwrite",
+      recovery: input.operation === "create"
+        ? { instruction: `Remove ${target} if the newly created file should be undone.` }
+        : { instruction: "Restore the prior contents from version control or a backup; cj did not create a rollback snapshot." },
       payload: { ...input, target, ...(snapshot ? { snapshot } : {}) },
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     };
@@ -137,7 +140,8 @@ export class WriteFileTool implements Tool<WriteFileInput, WriteFilePayload> {
       message: context.language === "zh-CN"
         ? `${action.payload.path} 的${operation === "create" ? "创建" : operation === "append" ? "追加" : "覆盖"}操作已完成`
         : `${operation} completed for ${action.payload.path}`,
-      effects: [`${operation} file ${target}`]
+      effects: [`${operation} file ${target}`],
+      ...(action.recovery === undefined ? {} : { recovery: action.recovery })
     };
   }
 }
