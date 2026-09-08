@@ -13,7 +13,7 @@ export const providerConfigSchema = z.object({
 export const profileSchema = z.object({
   provider: providerConfigSchema,
   limits: z.object({
-    maxToolCalls: z.number().int().min(1).max(20),
+    maxToolCalls: z.number().int().min(1),
     taskTimeoutMs: z.number().int().min(1_000).max(300_000),
     modelTimeoutMs: z.number().int().min(1_000).max(300_000),
     toolTimeoutMs: z.number().int().min(100).max(120_000),
@@ -31,7 +31,7 @@ const legacyConfigSchema = z.object({
   }),
   language: z.enum(["zh-CN", "en"]),
   limits: z.object({
-    maxToolCalls: z.number().int().min(1).max(20),
+    maxToolCalls: z.number().int().min(1),
     taskTimeoutMs: z.number().int().min(1_000).max(300_000)
   })
 }).strict();

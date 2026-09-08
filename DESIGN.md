@@ -40,6 +40,7 @@ The model is a planner and Tool caller. It is never the security boundary. The C
 cj <prompt...>                 Run a single task
 cj chat                        Run an interactive multi-turn session
 cj config                     Configure an LLM provider interactively
+cj config tui                 Open the full-screen application settings interface
 cj config list                Show configuration with secrets redacted
 cj tools list                 List registered Tools
 cj tools show <name>          Show Tool schema, behavior, and risk metadata
@@ -282,7 +283,7 @@ Multiple Tool calls returned in one model response are deliberately executed seq
 
 ### 6.2 Limits
 
-- Maximum 20 executed Tool calls per task.
+- A configurable positive maximum number of executed Tool calls per task (default: 20).
 - Maximum wall time 5 minutes per task.
 - Provider and Tool calls receive a shared `AbortSignal`.
 - The runtime does not automatically increase either limit.

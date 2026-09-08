@@ -21,6 +21,7 @@ npm link
 
 ```bash
 cj config
+cj config tui
 cj config list
 cj config profile list
 cj config profile add work --provider openai --base-url https://example.invalid/v1 --model example-model
@@ -32,6 +33,8 @@ cj doctor
 The default provider is DeepSeek `deepseek-v4-flash` in non-thinking mode. Non-secret settings and credentials are stored separately in the operating system's per-user application-data directory. Literal API Keys use an owner-only credential file; environment-variable references are also supported.
 
 `cj doctor --offline` validates local configuration without making a model request. Use `--profile <name>` for a one-off profile selection; no API key can be supplied on the command line.
+
+`cj config tui` opens a full-screen keyboard settings interface in an 80×24-or-larger TTY. It manages profiles, credentials, language and limits, authorization roots, external CLI directories, local extensions, memory enablement, and existing Skills trust records. Changes stay in memory until `Ctrl+S` applies them; `q` offers to save or discard. API Keys are always masked and never prefilled.
 
 ## Use
 

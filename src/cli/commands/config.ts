@@ -22,6 +22,15 @@ async function resolveCliDirectory(input: string): Promise<string> {
 export function addConfigCommand(program: Command, store: ConfigStore): void {
   const command = program.command("config").description("Manage model profiles, credentials, workspace access and tool sources");
 
+  command.command("tui").description("Open the full-screen application settings interface").action(async (_options: unknown, subcommand: Command) => {
+    const global = subcommand.optsWithGlobals() as { json?: boolean };
+    if (global.json) throw new CjError("CONFIG_INVALID", "cj config tui cannot run in JSON mode");
+    // Ink and React are only needed for the full-screen UI. Keep ordinary
+    // commands lightweight by loading them after the explicit TUI entrypoint.
+    const { runConfigTui } = await import("../config-tui/run.js");
+    await runConfigTui(store);
+  });
+
   command.action(async () => {
     const current = await store.loadConfig();
     const currentAuth = await store.loadAuth();

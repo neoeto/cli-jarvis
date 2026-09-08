@@ -33,6 +33,15 @@ describe("ConfigStore", () => {
     await expect(store.loadConfig()).resolves.toEqual(config);
   });
 
+  it("accepts a tool-call limit above the default", async () => {
+    const store = await temporaryStore();
+    const config = structuredClone(defaultConfig);
+    config.limits.maxToolCalls = 50;
+    if (config.profiles.default) config.profiles.default.limits.maxToolCalls = 50;
+    await store.saveConfig(config);
+    await expect(store.loadConfig()).resolves.toMatchObject({ limits: { maxToolCalls: 50 } });
+  });
+
   it("stores and resolves a literal API key", async () => {
     const store = await temporaryStore();
     await store.saveAuth({
@@ -45,6 +54,25 @@ describe("ConfigStore", () => {
       await chmod(store.paths.authFile, 0o600);
       expect((await stat(store.paths.authFile)).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it("validates both configuration documents before batch settings save", async () => {
+    const store = await temporaryStore();
+    const invalidAuth = { version: 1, providers: { deepseek: { type: "env", variable: "not-valid" } } } as unknown as Parameters<ConfigStore["saveSettings"]>[1];
+    await expect(store.saveSettings(defaultConfig, invalidAuth)).rejects.toThrow();
+    await expect(readFile(store.paths.authFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(store.paths.configFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("restores the previous auth state when saving config fails after auth succeeds", async () => {
+    const store = await temporaryStore();
+    await store.saveAuth({ version: 1, providers: { deepseek: { type: "api_key", key: "old-secret" } } });
+    await mkdir(store.paths.configFile, { recursive: true });
+    await expect(store.saveSettings(defaultConfig, {
+      version: 1,
+      providers: { deepseek: { type: "api_key", key: "new-secret" } }
+    })).rejects.toThrow();
+    await expect(store.resolveApiKey("deepseek")).resolves.toBe("old-secret");
   });
 
   it("rejects a credential file readable by group or other users", async () => {

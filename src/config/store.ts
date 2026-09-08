@@ -95,6 +95,25 @@ export class ConfigStore {
     await assertSecureWindowsAcl(this.paths.authFile);
   }
 
+  /**
+   * Validate a settings draft before writing either document. Both individual
+   * writes remain atomic; if the config write fails after auth succeeds, put
+   * the previous auth state back on a best-effort basis and preserve the
+   * caller's draft for retry.
+   */
+  async saveSettings(config: AppConfig, auth: AuthConfig): Promise<void> {
+    const parsedConfig = appConfigSchema.parse(config);
+    const parsedAuth = authConfigSchema.parse(auth);
+    const previousAuth = await this.loadAuth();
+    await this.saveAuth(parsedAuth);
+    try {
+      await this.saveConfig(parsedConfig);
+    } catch (error) {
+      await this.saveAuth(previousAuth).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async resolveApiKey(providerId: string): Promise<string> {
     const credential = (await this.loadAuth()).providers[providerId];
     if (!credential) throw new CjError("AUTH_MISSING", `No credentials configured for ${providerId}`);
