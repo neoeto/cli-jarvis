@@ -98,6 +98,22 @@ The host wraps loaded SDK Tools with manifest/effect validation, authorization r
 
 The versioned TypeScript contract is exported as `cli-jarvis/tools-sdk` (`TOOL_SDK_VERSION` is currently `1`).
 
+## Agent Skills
+
+CJ also supports standard local Agent Skills. A user-level Skill lives at `skills/<name>/SKILL.md` under CJ's configuration directory. A project can provide Skills in `.cj/skills/<name>/SKILL.md`, but CJ ignores them until you explicitly trust the exact current contents:
+
+```bash
+cj skills trust
+cj skills list
+cj skills show release_checklist
+cj skills doctor
+cj skills untrust
+```
+
+`SKILL.md` must begin with YAML frontmatter containing `name` and `description`. User Skills are available automatically; a trusted workspace Skill overrides a user Skill with the same name. CJ gives the model only the name, description, and source initially. It can call the low-risk `read_skill` Tool only when a Skill is relevant, including to read package-relative UTF-8 text resources such as `references/checklist.md`.
+
+Skill packages cannot use symbolic links or escape their own directory. CJ redacts recognized secrets, applies output limits, and rejects a workspace Skill as soon as any package file changes until it is trusted again. A Skill is guidance, not a privileged plugin: it cannot override user requests or host policy, automatically execute scripts, bypass path authorization, or approve a high-risk Tool call.
+
 ## Safety model
 
 - Low-risk, read-only operations run automatically.

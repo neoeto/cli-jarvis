@@ -35,6 +35,10 @@ import { resolveAllowedRoots } from "../policy/paths.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { discoverLocalTools } from "../tools/extensions.js";
 import { addCompletionCommand } from "./completion.js";
+import { addSkillsCommand } from "./commands/skills.js";
+import { discoverSkills, type SkillCatalog } from "../skills/catalog.js";
+import { ReadSkillTool } from "../tools/builtins/read-skill.js";
+import path from "node:path";
 
 const CLI_VERSION = "1.0.0";
 const program = new Command();
@@ -102,6 +106,17 @@ async function configureExtensions(config: AppConfig): Promise<void> {
   }
 }
 
+async function configureSkills(config: AppConfig, workspaceRoot: string): Promise<SkillCatalog> {
+  const catalog = await discoverSkills({
+    userDirectory: store.paths.skillsDir,
+    workspaceDirectory: path.join(workspaceRoot, ".cj", "skills"),
+    trustedWorkspaceDirectories: config.skills.trustedWorkspaceDirectories
+  });
+  registry.removeByOrigin("skill");
+  if (catalog.skills.length) registry.register(new ReadSkillTool(), "skill");
+  return catalog;
+}
+
 function selectProfile(config: AppConfig, name: string | undefined): AppConfig {
   if (!name || name === config.activeProfile) return config;
   const profile = config.profiles[name];
@@ -143,6 +158,7 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
 
   try {
     await configureExtensions(options.config);
+    const skillCatalog = await configureSkills(options.config, options.workspaceRoot);
     const allowedRoots = await resolveAllowedRoots(options.workspaceRoot, options.config.security.allowedRoots);
     const memoryFacts = options.config.memory.enabled ? await memoryStore.list() : [];
     const renderer = options.json
@@ -182,6 +198,7 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
       emitLifecycle: true,
       ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
       memoryFacts,
+      skillCatalog,
       ...(options.onToolExecuted === undefined ? {} : { onToolExecuted: options.onToolExecuted }),
       signal: options.signal,
       ...(options.messages ? { messages: options.messages } : {}),
@@ -412,6 +429,7 @@ addConfigCommand(program, store);
 addToolsCommand(program, registry, store);
 addHistoryCommand(program, audit);
 addMemoryCommand(program, store, memoryStore);
+addSkillsCommand(program, store);
 addCompletionCommand(program, store, registry);
 
 program

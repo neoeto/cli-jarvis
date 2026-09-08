@@ -9,6 +9,7 @@ export interface AppPaths {
   historyFile: string;
   memoryFile: string;
   toolsDir: string;
+  skillsDir: string;
 }
 
 export function getAppPaths(env: NodeJS.ProcessEnv = process.env): AppPaths {
@@ -37,6 +38,7 @@ export function getAppPaths(env: NodeJS.ProcessEnv = process.env): AppPaths {
     authFile: path.join(configDir, "auth.json"),
     historyFile: path.join(stateDir, "history.jsonl"),
     memoryFile: path.join(stateDir, "memory.json"),
-    toolsDir: path.join(configDir, "tools")
+    toolsDir: path.join(configDir, "tools"),
+    skillsDir: path.join(configDir, "skills")
   };
 }

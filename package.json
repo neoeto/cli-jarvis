@@ -40,6 +40,7 @@
     "openai": "^5.20.3",
     "picocolors": "^1.1.1",
     "trash": "^10.1.1",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

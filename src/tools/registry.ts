@@ -4,9 +4,9 @@ import type { Tool } from "./types.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
-  private readonly origins = new Map<string, "builtin" | "local-extension" | "external-cli">();
+  private readonly origins = new Map<string, "builtin" | "local-extension" | "external-cli" | "skill">();
 
-  register(tool: Tool, origin: "builtin" | "local-extension" | "external-cli" = "builtin"): this {
+  register(tool: Tool, origin: "builtin" | "local-extension" | "external-cli" | "skill" = "builtin"): this {
     const name = tool.definition.function.name;
     if (this.tools.has(name)) throw new Error(`Tool already registered: ${name}`);
     this.tools.set(name, tool);
@@ -15,8 +15,12 @@ export class ToolRegistry {
   }
 
   removeExternalTools(): void {
+    this.removeByOrigin("external-cli");
+  }
+
+  removeByOrigin(originToRemove: "builtin" | "local-extension" | "external-cli" | "skill"): void {
     for (const [name, origin] of this.origins) {
-      if (origin === "external-cli") { this.tools.delete(name); this.origins.delete(name); }
+      if (origin === originToRemove) { this.tools.delete(name); this.origins.delete(name); }
     }
   }
 
@@ -34,7 +38,7 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  origin(name: string): "builtin" | "local-extension" | "external-cli" | undefined {
+  origin(name: string): "builtin" | "local-extension" | "external-cli" | "skill" | undefined {
     return this.origins.get(name);
   }
 }

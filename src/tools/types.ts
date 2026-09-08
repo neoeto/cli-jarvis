@@ -1,4 +1,5 @@
 import type { ModelToolDefinition } from "../providers/types.js";
+import type { SkillCatalog } from "../skills/catalog.js";
 
 export type RiskLevel = "low" | "medium" | "high";
 export type EffectKind = "read" | "write" | "move" | "trash" | "delete" | "process" | "network" | "git";
@@ -12,6 +13,8 @@ export interface ToolContext {
   maxOutputBytes?: number;
   /** Preview mode prepares and validates an action but never calls execute. */
   dryRun?: boolean;
+  /** Host-validated Skill catalog available to the built-in read_skill Tool. */
+  skillCatalog?: SkillCatalog;
 }
 
 export interface RecoveryInfo {

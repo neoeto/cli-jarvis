@@ -48,7 +48,11 @@ function confirmationPanel(
   const lines = rawLines.flatMap((line) => wrapText(line, width));
   const header = ` ${zh ? "⚠ 需要确认" : "⚠ Confirmation required"} `;
   const headerWidth = textWidth(header);
-  const topFill = Math.max(1, width + 2 - headerWidth - 2);
+  // The top line has `┏━` before the title and `┓` after its fill, while
+  // content lines and the bottom border occupy width + 4 cells. Keep the
+  // top-right corner in the same column even when the title has wide CJK
+  // characters or emoji.
+  const topFill = Math.max(1, width + 1 - headerWidth);
   const styleLine = (line: string): string => {
     const separator = line.indexOf(":");
     const styled = separator > 0

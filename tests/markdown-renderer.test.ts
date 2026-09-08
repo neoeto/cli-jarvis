@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createHumanRenderer } from "../src/cli/renderers/human.js";
 import { renderMarkdown } from "../src/cli/renderers/markdown.js";
 
+function displayWidth(value: string): number {
+  return [...value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")].reduce(
+    (width, character) => width + (/[┏┓┗┛┃━]/u.test(character) ? 1 : /[^\u0000-\u00FF]/u.test(character) ? 2 : 1),
+    0
+  );
+}
+
 describe("terminal Markdown renderer", () => {
   it("formats common Markdown blocks for a terminal", () => {
     const rendered = renderMarkdown(`# 状态
@@ -68,7 +75,7 @@ const ok = true;
   it("renders confirmation details as a visually distinct panel", async () => {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
-      const renderer = createHumanRenderer({ verbose: false, language: "zh-CN" });
+      const renderer = createHumanRenderer({ verbose: false, language: "zh-CN", noColor: true });
       await renderer({
         type: "confirmation_requested",
         request: {
@@ -87,6 +94,10 @@ const ok = true;
       expect(serialized).toContain("需要确认");
       expect(serialized).toContain("操作:");
       expect(serialized).toContain("目标:");
+      const [top, firstContent, ...rest] = serialized.trimEnd().split("\n");
+      const bottom = rest.at(-1);
+      expect(displayWidth(top ?? "")).toBe(displayWidth(firstContent ?? ""));
+      expect(displayWidth(top ?? "")).toBe(displayWidth(bottom ?? ""));
     } finally {
       write.mockRestore();
     }

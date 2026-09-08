@@ -56,7 +56,13 @@ export const appConfigSchema = z.object({
   }).default({ allowedRoots: ["."] }),
   memory: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
   externalCli: z.object({ directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([]) }).strict().default({ directories: [] }),
-  plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] })
+  plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] }),
+  skills: z.object({
+    trustedWorkspaceDirectories: z.array(z.object({
+      directory: z.string().min(1).refine((value) => path.isAbsolute(value), "Skill directory must be absolute"),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/)
+    }).strict()).max(100).default([])
+  }).strict().default({ trustedWorkspaceDirectories: [] })
 }).strict().superRefine((value, context) => {
   if (!value.profiles[value.activeProfile]) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["activeProfile"], message: "Active profile does not exist" });
@@ -107,7 +113,8 @@ export const defaultConfig: AppConfig = {
   security: { allowedRoots: ["."] },
   memory: { enabled: false },
   externalCli: { directories: [] },
-  plugins: { enabled: [] }
+  plugins: { enabled: [] },
+  skills: { trustedWorkspaceDirectories: [] }
 };
 
 /** Convert the original single-provider file without changing its credentials. */
@@ -132,7 +139,8 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     security: { allowedRoots: ["."] },
     memory: { enabled: false },
     externalCli: { directories: [] },
-    plugins: { enabled: [] }
+    plugins: { enabled: [] },
+    skills: { trustedWorkspaceDirectories: [] }
   };
 }
 

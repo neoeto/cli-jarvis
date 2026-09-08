@@ -7,6 +7,7 @@ import type { PreparedAction, Tool, ToolContext, ToolResult } from "../tools/typ
 import type { EventSink } from "./events.js";
 import { createSystemPrompt } from "./system-prompt.js";
 import type { TaskStatus } from "./events.js";
+import type { SkillCatalog } from "../skills/catalog.js";
 
 export interface AgentRuntimeOptions {
   provider: ModelProvider;
@@ -22,6 +23,7 @@ export interface AgentRuntimeOptions {
   emitLifecycle?: boolean;
   dryRun?: boolean;
   memoryFacts?: Array<{ id: string; text: string }>;
+  skillCatalog?: SkillCatalog;
   onToolExecuted?: () => void;
   signal: AbortSignal;
   /**
@@ -91,7 +93,7 @@ export class AgentRuntime {
     if (this.messages.length === 0) {
       this.messages.push({
         role: "system",
-        content: createSystemPrompt(options.workspaceRoot, options.language)
+        content: createSystemPrompt(options.workspaceRoot, options.language, options.skillCatalog?.skills)
       });
       if (options.memoryFacts?.length) {
         this.messages.push({
@@ -102,6 +104,9 @@ export class AgentRuntime {
           ].join("\n")
         });
       }
+    } else {
+      const basePrompt = this.messages.find((message): message is Extract<AgentMessage, { role: "system" | "user" }> => message.role === "system");
+      if (basePrompt) basePrompt.content = createSystemPrompt(options.workspaceRoot, options.language, options.skillCatalog?.skills);
     }
   }
 
@@ -117,7 +122,8 @@ export class AgentRuntime {
       language,
       ...(this.options.toolTimeoutMs === undefined ? {} : { toolTimeoutMs: this.options.toolTimeoutMs }),
       ...(this.options.maxOutputBytes === undefined ? {} : { maxOutputBytes: this.options.maxOutputBytes }),
-      ...(this.options.dryRun === undefined ? {} : { dryRun: this.options.dryRun })
+      ...(this.options.dryRun === undefined ? {} : { dryRun: this.options.dryRun }),
+      ...(this.options.skillCatalog === undefined ? {} : { skillCatalog: this.options.skillCatalog })
     };
     let executedCalls = 0;
     let invalidRounds = 0;
