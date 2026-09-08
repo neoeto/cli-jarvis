@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 
 export const providerConfigSchema = z.object({
@@ -54,6 +55,7 @@ export const appConfigSchema = z.object({
     )).min(1).max(100).default(["."])
   }).default({ allowedRoots: ["."] }),
   memory: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
+  externalCli: z.object({ directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([]) }).strict().default({ directories: [] }),
   plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] })
 }).strict().superRefine((value, context) => {
   if (!value.profiles[value.activeProfile]) {
@@ -104,6 +106,7 @@ export const defaultConfig: AppConfig = {
   },
   security: { allowedRoots: ["."] },
   memory: { enabled: false },
+  externalCli: { directories: [] },
   plugins: { enabled: [] }
 };
 
@@ -128,6 +131,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     limits,
     security: { allowedRoots: ["."] },
     memory: { enabled: false },
+    externalCli: { directories: [] },
     plugins: { enabled: [] }
   };
 }

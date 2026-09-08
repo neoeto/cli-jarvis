@@ -147,7 +147,28 @@ When enabled and relevant, the task emits the memory IDs and purpose used. The m
 
 ## Shell completion and diagnostics
 
-Source the relevant file from `completions/` (`cj.bash`, `cj.zsh`, `cj.fish`, or `cj.ps1`) to enable basic completion. `cj version --diagnose` shows version, platform, active profile, and protected local-store health without printing credentials.
+Generate a completion script for the shell you use:
+
+```bash
+# Bash
+eval "$(cj completion bash)"
+
+# Zsh
+eval "$(cj completion zsh)"
+
+# Fish
+cj completion fish | source
+```
+
+PowerShell:
+
+```powershell
+cj completion powershell | Out-String | Invoke-Expression
+```
+
+The generated script delegates candidate lookup to `cj`'s command tree, so it stays aligned with installed commands and options. It also completes configured profile names for `--profile` and registered Tool names after `cj tools show`. Candidate lookup is local and read-only; it does not call the model or execute external CLI business commands. Set `CJ_COMMAND` when the executable is not named `cj`, for example `CJ_COMMAND=/path/to/cj eval "$(/path/to/cj completion bash)"`.
+
+The matching checked-in files are available under `completions/` for shell startup configuration. `cj version --diagnose` shows version, platform, active profile, and protected local-store health without printing credentials.
 
 ## Development
 
@@ -173,3 +194,47 @@ npm run test:live
 See [DESIGN.md](./DESIGN.md) for the detailed architecture and accepted product decisions.
 
 See [ROADMAP.md](./ROADMAP.md) for post-MVP feature planning, with improved interactive experience as the first milestone.
+
+## External CLI directories
+
+Register existing executables or file symlinks without writing an SDK plugin:
+
+```bash
+mkdir -p "$HOME/my-cli-tools"
+ln -s /absolute/path/to/my-cli "$HOME/my-cli-tools/my-cli"
+cj config cli-dir add "$HOME/my-cli-tools"
+cj config cli-dir list
+cj tools refresh
+cj tools list
+cj tools doctor
+```
+
+Adding a directory authorizes bounded help probes of its executables and documentation review using the selected model. Only direct files are discovered; subdirectories and system PATH are not scanned. POSIX executable scripts/binaries and Windows native `.exe`/`.com` files are supported. Windows `.cmd`/`.bat` wrappers are reported as unsupported. Duplicate real targets are deduplicated; same-named executables at different paths receive distinct Tool names.
+
+Before each task, chat turn, and retry, `cj` checks for additions, removals and changes. It tries `--help`, then `-h` when needed, and probes subcommands explicitly listed in command sections. Each probe has a 3-second timeout and 64 KiB combined output budget (32 KiB per stream); each CLI has at most 20 probes and a 256 KiB document budget. Help probes run with closed stdin and a minimal environment. They never execute business examples.
+
+Local checks reject empty, version-only or unreadable help. The current profile's model then reviews whether each capability has a clear purpose, invocation syntax, required arguments, option values and a usable syntax/example. Documentation is redacted before being sent to the provider. Only approved leaf commands with supported, unambiguous parameter mappings become Tools. Unsupported or insufficiently documented capabilities remain unavailable; other capabilities can still pass.
+
+To supplement weak help, place `my-cli.md` or `my-cli.help.txt` alongside the executable or symlink. For example:
+
+```text
+Greet a person by name.
+Usage: my-cli --name NAME
+--name NAME: required string; the person to greet.
+Example: my-cli --name Alice
+```
+
+Use actual syntax and describe required arguments, accepted values, defaults, limitations and output. A generic shared `README.md` is not automatically attributed to every executable. Supplementary text is collected once and can document any explicitly discovered and probed child command. Repeatable/variadic arguments, conditional parameter grammars, arbitrary command passthrough and shell syntax are not supported in this first version.
+
+```bash
+cj tools refresh --force          # Recollect help and review, ignoring old decisions
+cj --profile work tools refresh   # Use another configured model profile
+cj tools show <generated-tool-name>
+cj config cli-dir remove "$HOME/my-cli-tools"
+```
+
+`tools list`, `tools show` and `tools doctor` inspect current files and validated cached decisions without starting executables or contacting a model. Diagnostics distinguish pending, approved, partially approved, rejected, unsupported and failed candidates. Review/network errors leave the affected CLI unavailable and can be retried with `tools refresh`; they do not disable built-in Tools.
+
+Reviews are cached in the local state directory under `external-cli-cache/`, separately from audit history. Executable contents, symlink target, companion documentation, model configuration and review-rule version determine reuse. Changes invalidate approval; dependencies outside the executable and companion files require `--force`. Long-running sessions refresh the configured directory list at each task boundary. Removing a directory or executable revokes its generated Tools at the next boundary.
+
+Approved external Tools always require execution confirmation, use fixed executable/subcommand paths and validated argv, and inherit process cancellation, timeouts, output limits, redaction and audit logging. Documentation approval assesses callability, not business correctness or trustworthiness. Existing `run_command` behavior is unchanged.

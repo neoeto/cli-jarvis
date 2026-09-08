@@ -1,11 +1,26 @@
+import path from "node:path";
+import { realpath, stat } from "node:fs/promises";
 import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import type { ConfigStore } from "../../config/store.js";
 import { printableConfig } from "../../config/redact.js";
 import { CjError } from "../../shared/errors.js";
 
+async function resolveCliDirectory(input: string): Promise<string> {
+  let candidate = path.resolve(input);
+  const missing: string[] = [];
+  for (;;) {
+    try { return path.join(await realpath(candidate), ...missing); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || path.dirname(candidate) === candidate) throw error;
+      missing.unshift(path.basename(candidate));
+      candidate = path.dirname(candidate);
+    }
+  }
+}
+
 export function addConfigCommand(program: Command, store: ConfigStore): void {
-  const command = program.command("config").description("Configure the LLM provider");
+  const command = program.command("config").description("Manage model profiles, credentials, workspace access and tool sources");
 
   command.action(async () => {
     const current = await store.loadConfig();
@@ -147,6 +162,42 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
       await store.saveConfig({ ...config, security: { allowedRoots: [...new Set(roots)] } });
       process.stdout.write("Authorization roots saved.\n");
     });
+
+  const cliDir = command.command("cli-dir")
+    .description("Manage directories for automatic external CLI discovery")
+    .addHelpText("after", `
+External CLIs are checked before each task. Only capabilities with sufficient
+usage documentation are registered after local checks and model review.
+Adding a directory allows bounded help probes of its executables.
+
+Examples:
+  cj config cli-dir add /absolute/path/to/cli-tools
+  cj tools refresh
+  cj tools doctor
+`);
+  cliDir.command("list").description("List configured external CLI directories").action(async () => {
+    for (const directory of (await store.loadConfig()).externalCli.directories) process.stdout.write(`${directory}\n`);
+  });
+  cliDir.command("add")
+    .description("Add a discovery directory and allow bounded CLI help probes")
+    .argument("<path>", "existing directory containing executables or file symlinks")
+    .addHelpText("after", "\nSaves the directory; discovery and model review run before the next task.\nUse cj tools refresh to review now. Adding a directory does not approve execution.\n")
+    .action(async (directory: string) => {
+    const resolved = await realpath(path.resolve(directory));
+    if (!(await stat(resolved)).isDirectory()) throw new CjError("CONFIG_INVALID", "CLI root must be a directory");
+    const config = await store.loadConfig();
+    await store.saveConfig({ ...config, externalCli: { directories: [...new Set([...config.externalCli.directories, resolved])] } });
+    process.stdout.write(`CLI directory added (bounded help probes authorized): ${resolved}\n`);
+  });
+  cliDir.command("remove")
+    .description("Remove a discovery directory; leave its files in place")
+    .argument("<path>", "configured directory to stop scanning")
+    .action(async (directory: string) => {
+    const resolved = await resolveCliDirectory(directory);
+    const config = await store.loadConfig();
+    await store.saveConfig({ ...config, externalCli: { directories: config.externalCli.directories.filter((item) => item !== resolved) } });
+    process.stdout.write(`CLI directory removed: ${resolved}\n`);
+  });
 
   const plugin = command.command("plugin").description("Enable or disable opt-in local Tool extensions");
   plugin.command("list").action(async () => {

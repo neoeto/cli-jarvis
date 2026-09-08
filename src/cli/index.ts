@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { refreshExternalTools } from "../tools/external-cli.js";
 import { realpath } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { Command } from "commander";
@@ -33,6 +34,7 @@ import { addMemoryCommand } from "./commands/memory.js";
 import { resolveAllowedRoots } from "../policy/paths.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { discoverLocalTools } from "../tools/extensions.js";
+import { addCompletionCommand } from "./completion.js";
 
 const CLI_VERSION = "1.0.0";
 const program = new Command();
@@ -152,6 +154,20 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
           noColor: options.noColor
         });
     render = renderer;
+    const externalConfig = await store.loadConfig();
+    if (externalConfig.externalCli.directories.length) {
+      await renderer({ type: "status", message: options.language === "zh-CN" ? "正在检查外部 CLI 及其用法说明…" : "Checking external CLIs and documentation…" });
+    }
+    const externalDiagnostics = await refreshExternalTools({ registry, config: { ...options.config, externalCli: externalConfig.externalCli }, stateDir: store.paths.stateDir,
+      provider: async () => createProvider(options.config, options.apiKey), signal: options.signal });
+    if (externalDiagnostics.length) {
+      const registered = externalDiagnostics.reduce((sum, item) => sum + item.tools.length, 0);
+      const event = { type: "status" as const, message: options.language === "zh-CN"
+        ? `外部 CLI：已注册 ${registered} 项能力；详细审核结果见 cj tools doctor。`
+        : `External CLI: ${registered} capabilities registered; inspect cj tools doctor for review details.` };
+      await renderer(event);
+      await audit.agentEvent(auditContext.taskId, event);
+    }
     const runtime = new AgentRuntime({
       provider: createProvider(options.config, options.apiKey),
       model: options.config.provider.model,
@@ -218,7 +234,7 @@ async function executeTaskWithController(
 
 program
   .name("cj")
-  .description("A local, tool-using personal AI assistant")
+  .description("A local AI assistant that completes natural-language tasks using built-in and external tools")
   .version(CLI_VERSION)
   .option("--json", "emit JSON Lines events")
   .option("--verbose", "show detailed Tool results")
@@ -230,6 +246,17 @@ program
   .option("--task-events", "emit task lifecycle events (including in JSONL mode)")
   .option("--profile <name>", "use a configured profile for this invocation without changing the default")
   .argument("[prompt...]", "natural-language task")
+  .addHelpText("after", `
+Examples:
+  cj "List the largest files in this directory"
+  cj chat
+  cj config
+  cj config cli-dir add /absolute/path/to/cli-tools
+  cj tools doctor
+
+External CLI capabilities are discovered and reviewed before each task.
+Use cj <command> --help for command-specific usage.
+`)
   .action(async (
     words: string[],
     options: CliOptions
@@ -385,6 +412,7 @@ addConfigCommand(program, store);
 addToolsCommand(program, registry, store);
 addHistoryCommand(program, audit);
 addMemoryCommand(program, store, memoryStore);
+addCompletionCommand(program, store, registry);
 
 program
   .command("version")
