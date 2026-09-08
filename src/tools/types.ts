@@ -5,6 +5,12 @@ import type { QuestionHandler } from "../agent/questions.js";
 export type RiskLevel = "low" | "medium" | "high";
 export type EffectKind = "read" | "write" | "move" | "trash" | "delete" | "process" | "network" | "git";
 
+/** Host-owned capability for a configured web-search provider. Credentials are resolved only at execution time. */
+export interface WebSearchCapability {
+  enabled: boolean;
+  resolveApiKey: () => Promise<string>;
+}
+
 export interface ToolContext {
   workspaceRoot: string;
   signal: AbortSignal;
@@ -18,6 +24,8 @@ export interface ToolContext {
   skillCatalog?: SkillCatalog;
   /** Host-owned interactive clarification handler available only on a TTY. */
   askQuestion?: QuestionHandler;
+  /** Optional host-owned web-search configuration and deferred credential resolver. */
+  webSearch?: WebSearchCapability;
 }
 
 export interface RecoveryInfo {

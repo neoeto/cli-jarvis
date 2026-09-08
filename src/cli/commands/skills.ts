@@ -7,7 +7,7 @@ import { CjError } from "../../shared/errors.js";
 
 async function workspaceSkillsDirectory(): Promise<string> {
   const workspace = await realpath(process.cwd());
-  return path.join(workspace, ".cj", "skills");
+  return path.join(workspace, ".agent", "skills");
 }
 
 async function catalog(store: ConfigStore) {
@@ -25,7 +25,7 @@ export function addSkillsCommand(program: Command, store: ConfigStore): void {
     .description("Inspect and trust local Agent Skills")
     .addHelpText("after", `
 Skills use the standard SKILL.md frontmatter format. User Skills live under the
-configuration directory; workspace Skills live in .cj/skills and must be trusted
+configuration directory; workspace Skills live in .agent/skills and must be trusted
 explicitly. Skills only provide instructions and text resources; they cannot run
 scripts automatically or bypass CJ's Tool confirmation and authorization rules.
 
@@ -61,7 +61,7 @@ Examples:
     if (result.diagnostics.some((diagnostic) => !diagnostic.ok)) process.exitCode = 1;
   });
 
-  command.command("trust").description("Trust the current workspace's .cj/skills content until it changes").action(async () => {
+  command.command("trust").description("Trust the current workspace's .agent/skills content until it changes").action(async () => {
     const directory = await workspaceSkillsDirectory();
     let fingerprint: string;
     try {
@@ -83,7 +83,7 @@ Examples:
     process.stdout.write(`Trusted workspace Skill directory: ${directory}\n`);
   });
 
-  command.command("untrust").description("Remove trust for the current workspace's .cj/skills directory").action(async () => {
+  command.command("untrust").description("Remove trust for the current workspace's .agent/skills directory").action(async () => {
     const directory = await workspaceSkillsDirectory();
     const config = await store.loadConfig();
     const trustedWorkspaceDirectories = config.skills.trustedWorkspaceDirectories.filter((item) => item.directory !== directory);

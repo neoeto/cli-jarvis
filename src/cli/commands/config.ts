@@ -172,6 +172,54 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
       process.stdout.write("Authorization roots saved.\n");
     });
 
+  const webSearch = command.command("web-search").description("Configure the built-in Tavily web search tool");
+  webSearch
+    .command("configure")
+    .description("Configure a Tavily credential and enable web search")
+    .action(async () => {
+      const config = await store.loadConfig();
+      const auth = await store.loadAuth();
+      const zh = config.language === "zh-CN";
+      const storage = await select({
+        message: zh ? "Tavily API Key 保存方式" : "Tavily API Key storage",
+        choices: [
+          { name: zh ? "保存到仅当前用户可读的 auth.json" : "Save in owner-only auth.json", value: "api_key" as const },
+          { name: zh ? "从环境变量读取" : "Read from an environment variable", value: "env" as const }
+        ]
+      });
+      const credential = storage === "api_key"
+        ? {
+            type: "api_key" as const,
+            key: await password({ message: "Tavily API Key", mask: "*", validate: (value) => value.length > 0 || (zh ? "必填" : "Required") })
+          }
+        : {
+            type: "env" as const,
+            variable: await input({
+              message: zh ? "环境变量名" : "Environment variable",
+              default: "TAVILY_API_KEY",
+              validate: (value) => /^[A-Z_][A-Z0-9_]*$/.test(value) || (zh ? "请使用大写环境变量名" : "Use an uppercase environment variable name")
+            })
+          };
+      await store.saveSettings(
+        { ...config, webSearch: { enabled: true } },
+        { ...auth, providers: { ...auth.providers, tavily: credential } }
+      );
+      process.stdout.write(zh ? "Tavily 网络搜索已启用。每次搜索都需要确认。\n" : "Tavily web search enabled. Every search requires confirmation.\n");
+    });
+  webSearch.command("disable").description("Disable web search without removing its credential").action(async () => {
+    const config = await store.loadConfig();
+    await store.saveConfig({ ...config, webSearch: { enabled: false } });
+    process.stdout.write(config.language === "zh-CN" ? "网络搜索已禁用；Tavily 凭据仍被保留。\n" : "Web search disabled; the Tavily credential was retained.\n");
+  });
+  webSearch.command("status").description("Show web-search state and credential reference without revealing secrets").action(async () => {
+    const config = await store.loadConfig();
+    const credential = (await store.loadAuth()).providers.tavily;
+    const credentialStatus = credential
+      ? credential.type === "env" ? `env:${credential.variable}` : "stored"
+      : "missing";
+    process.stdout.write(`${config.webSearch.enabled ? "enabled" : "disabled"}\ttavily\t${credentialStatus}\n`);
+  });
+
   const cliDir = command.command("cli-dir")
     .description("Manage directories for automatic external CLI discovery")
     .addHelpText("after", `

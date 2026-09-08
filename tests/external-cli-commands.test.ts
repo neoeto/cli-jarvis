@@ -38,3 +38,19 @@ it("inspection and empty refresh work without credentials", async () => {
   }
   expect(credential).not.toHaveBeenCalled();
 });
+
+it("reports and disables Tavily web search without removing its credential", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cj-web-search-config-")); created.push(root);
+  const store = new ConfigStore(getAppPaths({ CJ_CONFIG_DIR: root }));
+  await store.saveConfig({ ...(await store.loadConfig()), webSearch: { enabled: true } });
+  await store.saveAuth({ version: 1, providers: { tavily: { type: "env", variable: "TAVILY_API_KEY" } } });
+  const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  const run = async (...args: string[]) => {
+    const program = new Command(); addConfigCommand(program, store); await program.parseAsync(args, { from: "user" });
+  };
+  await run("config", "web-search", "status");
+  expect(output).toHaveBeenCalledWith("enabled\ttavily\tenv:TAVILY_API_KEY\n");
+  await run("config", "web-search", "disable");
+  expect((await store.loadConfig()).webSearch.enabled).toBe(false);
+  expect((await store.loadAuth()).providers.tavily).toEqual({ type: "env", variable: "TAVILY_API_KEY" });
+});

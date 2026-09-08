@@ -9,7 +9,7 @@ vi.mock("@inquirer/prompts", () => ({ confirm: confirmMock }));
 import { createTerminalConfirmation } from "../src/cli/confirmation.js";
 
 describe("terminal confirmation", () => {
-  it("uses a concise y/n prompt without exposing the internal action id", async () => {
+  it("discloses the action summary and targets without exposing the internal action id", async () => {
     confirmMock.mockResolvedValueOnce(true);
     const signal = new AbortController().signal;
     const request = {
@@ -23,7 +23,7 @@ describe("terminal confirmation", () => {
 
     await expect(createTerminalConfirmation("zh-CN")(request, signal)).resolves.toBe(true);
     expect(confirmMock).toHaveBeenCalledWith(
-      { message: "确认执行“run_command”吗？", default: false },
+      { message: "Run a command\n→ /workspace\n确认执行“run_command”吗？", default: false },
       { signal }
     );
     expect(JSON.stringify(confirmMock.mock.calls[0])).not.toContain("internal-action-id");

@@ -80,6 +80,9 @@ Human-readable assistant replies are rendered for the terminal: headings, emphas
 | `run_command` | Run an explicitly previewed process or shell command |
 | `git` | Structured status, diff, log, add, and commit operations |
 | `ask_question` | Pause one task for a material user clarification, with choices and free text |
+| `search_web` | Search the public web through a configured Tavily account |
+
+`search_web` is disabled until configured. Run `cj config web-search configure` to save a Tavily key in the owner-only credential store or reference an environment variable (normally `TAVILY_API_KEY`). Each search sends its query and any domain filters to Tavily, displays that disclosure in the confirmation prompt, and requires explicit confirmation. The tool returns only result titles, snippets, and links; it does not fetch full pages, request images, or request a Tavily-generated answer. Tavily usage may consume API credits; see the [Tavily Search API documentation](https://docs.tavily.com/documentation/api-reference/endpoint/search).
 
 Inspect the exact schemas and risk declarations with:
 
@@ -104,7 +107,7 @@ The versioned TypeScript contract is exported as `cli-jarvis/tools-sdk` (`TOOL_S
 
 ## Agent Skills
 
-CJ also supports standard local Agent Skills. A user-level Skill lives at `skills/<name>/SKILL.md` under CJ's configuration directory. A project can provide Skills in `.cj/skills/<name>/SKILL.md`, but CJ ignores them until you explicitly trust the exact current contents:
+CJ also supports standard local Agent Skills. A user-level Skill lives at `skills/<name>/SKILL.md` under CJ's configuration directory. A project can provide Skills in `.agent/skills/<name>/SKILL.md`, but CJ ignores them until you explicitly trust the exact current contents:
 
 ```bash
 cj skills trust

@@ -2,6 +2,7 @@
 
 ## 1.0.0
 
+- Added the opt-in `search_web` built-in Tool backed by Tavily, with delayed credential resolution, bounded result snippets, and confirmation for every external query.
 - Added interactive task controls, bounded model/tool execution, lifecycle audit events, previews, and recoverability hints.
 - Added named OpenAI-compatible provider profiles and safe v1 configuration migration.
 - Added an opt-in local Tool SDK with manifest validation and diagnostics.

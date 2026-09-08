@@ -108,4 +108,12 @@ describe("ConfigStore", () => {
     expect(migrated).toMatchObject({ version: 2, activeProfile: "default", provider: { id: "legacy", kind: "openai-compatible" } });
     expect(migrated.profiles.default?.limits.modelTimeoutMs).toBe(60_000);
   });
+
+  it("defaults web search to disabled for existing v2 configuration files", async () => {
+    const store = await temporaryStore();
+    const { webSearch: _webSearch, ...preWebSearchConfig } = defaultConfig;
+    await mkdir(path.dirname(store.paths.configFile), { recursive: true });
+    await writeFile(store.paths.configFile, JSON.stringify(preWebSearchConfig));
+    await expect(store.loadConfig()).resolves.toMatchObject({ version: 2, webSearch: { enabled: false } });
+  });
 });

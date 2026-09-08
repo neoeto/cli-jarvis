@@ -3,7 +3,7 @@ import { CjError } from "../shared/errors.js";
 import { PolicyEngine, type ConfirmationHandler, type PolicyDecision } from "../policy/engine.js";
 import type { AgentMessage, ModelProvider } from "../providers/types.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import type { PreparedAction, Tool, ToolContext, ToolResult } from "../tools/types.js";
+import type { PreparedAction, Tool, ToolContext, ToolResult, WebSearchCapability } from "../tools/types.js";
 import type { EventSink } from "./events.js";
 import { createSystemPrompt } from "./system-prompt.js";
 import type { TaskStatus } from "./events.js";
@@ -38,6 +38,7 @@ export interface AgentRuntimeOptions {
   interactive?: boolean;
   confirm?: ConfirmationHandler;
   askQuestion?: QuestionHandler;
+  webSearch?: WebSearchCapability;
   /** Pause/resume the host's active-task watchdog around human input. */
   onQuestionWaiting?: (waiting: boolean) => void;
   policy?: PolicyEngine;
@@ -167,6 +168,7 @@ export class AgentRuntime {
       ...(this.options.maxOutputBytes === undefined ? {} : { maxOutputBytes: this.options.maxOutputBytes }),
       ...(this.options.dryRun === undefined ? {} : { dryRun: this.options.dryRun }),
       ...(this.options.skillCatalog === undefined ? {} : { skillCatalog: this.options.skillCatalog }),
+      ...(this.options.webSearch === undefined ? {} : { webSearch: this.options.webSearch }),
       askQuestion
     };
 

@@ -55,6 +55,7 @@ export const appConfigSchema = z.object({
     )).min(1).max(100).default(["."])
   }).default({ allowedRoots: ["."] }),
   memory: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
+  webSearch: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
   externalCli: z.object({ directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([]) }).strict().default({ directories: [] }),
   plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] }),
   skills: z.object({
@@ -112,6 +113,7 @@ export const defaultConfig: AppConfig = {
   },
   security: { allowedRoots: ["."] },
   memory: { enabled: false },
+  webSearch: { enabled: false },
   externalCli: { directories: [] },
   plugins: { enabled: [] },
   skills: { trustedWorkspaceDirectories: [] }
@@ -138,6 +140,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     limits,
     security: { allowedRoots: ["."] },
     memory: { enabled: false },
+    webSearch: { enabled: false },
     externalCli: { directories: [] },
     plugins: { enabled: [] },
     skills: { trustedWorkspaceDirectories: [] }

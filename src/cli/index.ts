@@ -39,6 +39,7 @@ import { addSkillsCommand } from "./commands/skills.js";
 import { discoverSkills, type SkillCatalog } from "../skills/catalog.js";
 import { ReadSkillTool } from "../tools/builtins/read-skill.js";
 import { AskQuestionTool } from "../tools/builtins/ask-question.js";
+import { SearchWebTool } from "../tools/builtins/search-web.js";
 import { createTerminalQuestion } from "./question.js";
 import path from "node:path";
 
@@ -56,7 +57,8 @@ const registry = new ToolRegistry()
   .register(new TrashFilesTool())
   .register(new RunCommandTool())
   .register(new GitTool())
-  .register(new AskQuestionTool());
+  .register(new AskQuestionTool())
+  .register(new SearchWebTool());
 
 interface CliOptions {
   json?: boolean;
@@ -113,7 +115,7 @@ async function configureExtensions(config: AppConfig): Promise<void> {
 async function configureSkills(config: AppConfig, workspaceRoot: string): Promise<SkillCatalog> {
   const catalog = await discoverSkills({
     userDirectory: store.paths.skillsDir,
-    workspaceDirectory: path.join(workspaceRoot, ".cj", "skills"),
+    workspaceDirectory: path.join(workspaceRoot, ".agent", "skills"),
     trustedWorkspaceDirectories: config.skills.trustedWorkspaceDirectories
   });
   registry.removeByOrigin("skill");
@@ -203,6 +205,10 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
       ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
       memoryFacts,
       skillCatalog,
+      webSearch: {
+        enabled: options.config.webSearch.enabled,
+        resolveApiKey: () => store.resolveApiKey("tavily")
+      },
       ...(options.onToolExecuted === undefined ? {} : { onToolExecuted: options.onToolExecuted }),
       signal: options.signal,
       ...(options.messages ? { messages: options.messages } : {}),
