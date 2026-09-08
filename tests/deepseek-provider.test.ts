@@ -99,7 +99,7 @@ describe("DeepSeek provider", () => {
     });
   });
 
-  it("streams text deltas and also returns the complete message", async () => {
+  it.each([undefined, "Consider the request first."])("keeps reasoning %s separate from streamed answer text", async (reasoning) => {
     const server = createServer(async (request, response) => {
       for await (const _chunk of request) {
         // Drain the request before responding.
@@ -111,7 +111,7 @@ describe("DeepSeek provider", () => {
           object: "chat.completion.chunk",
           created: 1,
           model: "deepseek-v4-flash",
-          choices: [{ index: 0, finish_reason: finishReason, delta: { content } }]
+          choices: [{ index: 0, finish_reason: finishReason, delta: { content, ...(content === "hello " && reasoning ? { reasoning_content: reasoning } : {}) } }]
         })}\n\n`;
       response.end(`${chunk("hello ", null)}${chunk("world", "stop")}data: [DONE]\n\n`);
     });
@@ -139,6 +139,6 @@ describe("DeepSeek provider", () => {
       new AbortController().signal
     );
     expect(deltas).toEqual(["hello ", "world"]);
-    expect(result).toEqual({ kind: "message", content: "hello world", streamed: true });
+    expect(result).toEqual({ kind: "message", content: "hello world", streamed: true, ...(reasoning ? { reasoning } : {}) });
   });
 });

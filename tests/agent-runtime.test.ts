@@ -36,6 +36,40 @@ afterEach(async () => {
 });
 
 describe("AgentRuntime", () => {
+  it("classifies tool-call commentary and reasoning separately from the final answer", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-output-"));
+    created.push(root);
+    let round = 0;
+    const provider: ModelProvider = {
+      id: "fake",
+      async complete(request) {
+        if (round++ === 0) {
+          await request.onTextDelta?.("先列出文件。\n\n");
+          return {
+            kind: "tool_calls",
+            content: "先列出文件。\n\n",
+            reasoning: "需要检查目录。",
+            calls: [{ id: "list", name: "list_files", arguments: '{"path":"."}' }]
+          };
+        }
+        await request.onTextDelta?.("目录为空。");
+        return { kind: "message", content: "目录为空。", streamed: true };
+      }
+    };
+    const events: AgentEvent[] = [];
+    const runtime = new AgentRuntime({
+      provider, model: "fake", registry: new ToolRegistry().register(new ListFilesTool()),
+      workspaceRoot: root, language: "zh-CN", maxToolCalls: 20,
+      signal: new AbortController().signal, onEvent: (event) => events.push(event)
+    });
+    await expect(runtime.run("检查目录")).resolves.toBe("目录为空。");
+    expect(events.filter((event) => ["reasoning", "assistant_progress", "assistant"].includes(event.type))).toEqual([
+      { type: "reasoning", content: "需要检查目录。" },
+      { type: "assistant_progress", content: "先列出文件。\n\n" },
+      { type: "assistant", content: "目录为空。", streamed: true }
+    ]);
+  });
+
   it("executes list_files and returns its result to the model", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
     created.push(root);

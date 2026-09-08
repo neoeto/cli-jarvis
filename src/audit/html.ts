@@ -60,6 +60,8 @@ function eventLabel(event: string): string {
     question_resolved: "已收到澄清",
     assistant_delta: "助手流式输出",
     assistant: "助手响应",
+    assistant_progress: "助手决策",
+    reasoning: "模型思考",
     status: "状态",
     memory_used: "使用记忆"
   }[event] ?? event;

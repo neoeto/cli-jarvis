@@ -104,6 +104,8 @@ function auditDataForAgentEvent(event: AgentEvent): Record<string, unknown> {
       return { selectedCount: event.selectedCount, hasCustomInput: event.hasCustomInput };
     case "assistant_delta":
       return { deltaLength: event.content.length };
+    case "assistant_progress":
+    case "reasoning":
     case "assistant":
       return { responseLength: event.content.length };
     case "memory_used":

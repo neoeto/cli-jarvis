@@ -1,22 +1,24 @@
 import pc from "picocolors";
+import textWidth from "string-width";
 import type { AgentEvent, EventSink } from "../../agent/events.js";
 import { redactSecrets } from "../../policy/sensitive-data.js";
 import { renderMarkdown } from "./markdown.js";
 
 type Colors = ReturnType<typeof pc.createColors>;
 
-function textWidth(value: string): number {
-  return [...value].reduce(
-    (width, character) => width + (/[^\u0000-\u00FF]/u.test(character) ? 2 : 1),
-    0
-  );
-}
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function wrapText(value: string, width: number): string[] {
   const lines: string[] = [];
   let line = "";
   let lineWidth = 0;
-  for (const character of value) {
+  for (const { segment: character } of graphemes.segment(value)) {
+    if (character === "\n" || character === "\r\n") {
+      lines.push(line);
+      line = "";
+      lineWidth = 0;
+      continue;
+    }
     const characterWidth = textWidth(character);
     if (line && lineWidth + characterWidth > width) {
       lines.push(line);
@@ -46,7 +48,8 @@ function confirmationPanel(
   const terminalColumns = typeof process.stderr.columns === "number" ? process.stderr.columns : 100;
   const width = Math.max(42, Math.min(96, terminalColumns - 6));
   const lines = rawLines.flatMap((line) => wrapText(line, width));
-  const header = ` ${zh ? "⚠ 需要确认" : "⚠ Confirmation required"} `;
+  // Use a fixed-width marker: terminals disagree on whether ⚠ takes one or two cells.
+  const header = ` ${zh ? "! 需要确认" : "! Confirmation required"} `;
   const headerWidth = textWidth(header);
   // The top line has `┏━` before the title and `┓` after its fill, while
   // content lines and the bottom border occupy width + 4 cells. Keep the
@@ -87,47 +90,39 @@ export function createHumanRenderer(options: {
   noColor?: boolean;
 }): EventSink {
   const colors = pc.createColors(pc.isColorSupported && !(options.plain || options.noColor));
-  let streamedMarkdown = "";
-  let sawStreamDelta = false;
-  const flushStream = (final = false): void => {
-    if (!streamedMarkdown) return;
-    const fences = (streamedMarkdown.match(/(^|\n)\s*```/g) ?? []).length;
-    // Do not render an unfinished fenced block. Rendering only completed
-    // paragraph blocks also avoids repeatedly repainting Markdown syntax.
-    const paragraphBreak = streamedMarkdown.lastIndexOf("\n\n");
-    const lastBreak = final && fences % 2 === 0
-      ? streamedMarkdown.length
-      : fences % 2 === 0 && paragraphBreak >= 0
-        ? paragraphBreak + 2
-        : 0;
-    if (lastBreak <= 0) return;
-    const safe = streamedMarkdown.slice(0, lastBreak);
-    streamedMarkdown = streamedMarkdown.slice(lastBreak);
-    const rendered = renderMarkdown(safe, colors);
-    if (rendered) process.stdout.write(`${rendered}\n`);
+  const zh = options.language === "zh-CN";
+  const muted = (label: string, message: string): void => {
+    const lines = redactSecrets(message).value.split("\n");
+    process.stderr.write(`${colors.dim(lines.map((line, index) =>
+      `  ${index === 0 ? `[${label}]` : "  │"} ${line}`
+    ).join("\n"))}\n`);
   };
   return (event: AgentEvent) => {
     switch (event.type) {
       case "status":
-        process.stderr.write(`${colors.dim(event.message)}\n`);
+        muted(zh ? "状态" : "Status", event.message);
         break;
       case "task_status":
-        if (options.verbose) process.stderr.write(`${colors.dim(`[${event.taskId.slice(0, 8)}] ${event.status}${event.detail ? `: ${event.detail}` : ""}`)}\n`);
+        if (options.verbose) muted(zh ? "任务" : "Task", `[${event.taskId.slice(0, 8)}] ${event.status}${event.detail ? `: ${event.detail}` : ""}`);
         break;
       case "task_step":
-        if (options.verbose) process.stderr.write(`${colors.dim(`[${event.taskId.slice(0, 8)}] ${event.stepId} ${event.status}${event.dependsOn.length ? ` ← ${event.dependsOn.join(", ")}` : ""}${event.detail ? `: ${event.detail}` : ""}`)}\n`);
+        if (options.verbose) muted(zh ? "步骤" : "Step", `[${event.taskId.slice(0, 8)}] ${event.stepId} ${event.status}${event.dependsOn.length ? ` ← ${event.dependsOn.join(", ")}` : ""}${event.detail ? `: ${event.detail}` : ""}`);
         break;
       case "tool_start":
-        process.stderr.write(`${colors.cyan("→")} ${colors.bold(event.name)}: ${event.summary}\n`);
+        muted(zh ? "工具" : "Tool", `→ ${event.name}: ${event.summary}`);
         break;
       case "tool_preview":
-        process.stderr.write(`${colors.cyan("◇")} ${colors.bold(event.name)}: ${event.summary} ${colors.dim(options.language === "zh-CN" ? "(预览)" : "(preview)")}\n`);
+        muted(zh ? "预览" : "Preview", `◇ ${event.name}: ${event.summary}`);
         break;
       case "tool_result":
-        process.stderr.write(`${event.success ? colors.green("✓") : colors.red("✗")} ${event.message} ${colors.dim(`(${event.durationMs}ms)`)}\n`);
+        if (event.success) {
+          muted(zh ? "完成" : "Done", `✓ ${event.message} (${event.durationMs}ms)`);
+        } else {
+          process.stderr.write(`${colors.red(`✗ [${zh ? "失败" : "Failed"}] ${event.message}`)} ${colors.dim(`(${event.durationMs}ms)`)}\n`);
+        }
         if (options.verbose && event.data !== undefined) {
           const serialized = redactSecrets(JSON.stringify(event.data, null, 2)).value;
-          process.stderr.write(`${colors.dim(serialized)}\n`);
+          muted(zh ? "详情" : "Details", serialized);
         }
         if (event.recovery) {
           process.stderr.write(`${colors.dim(options.language === "zh-CN" ? `恢复提示：${event.recovery.instruction}` : `Recovery hint: ${event.recovery.instruction}`)}\n`);
@@ -152,30 +147,30 @@ export function createHumanRenderer(options: {
         // this semantic event silent to avoid printing the question twice.
         break;
       case "question_resolved":
-        process.stderr.write(`${colors.green(options.language === "zh-CN" ? "✓ 已收到回答" : "✓ Answer received")}\n`);
+        muted(zh ? "状态" : "Status", zh ? "✓ 已收到回答" : "✓ Answer received");
         break;
       case "assistant_delta":
-        sawStreamDelta = true;
-        streamedMarkdown += event.content;
-        flushStream();
+        // A text delta may precede Tool calls. Wait for the semantic response
+        // before deciding whether it belongs to the answer or the process log.
         break;
-      case "assistant":
-        if (sawStreamDelta && event.streamed) {
-          // Providers return both deltas and a complete string. Only flush the
-          // unrendered suffix so users never see a duplicated answer.
-          flushStream(true);
-          if (streamedMarkdown) {
-            process.stdout.write(`${renderMarkdown(streamedMarkdown, colors)}\n`);
-            streamedMarkdown = "";
-          }
-        } else {
-          process.stdout.write(`${renderMarkdown(event.content, colors)}\n`);
-        }
-        sawStreamDelta = false;
-        streamedMarkdown = "";
+      case "assistant_progress":
+        muted(zh ? "决策" : "Decision", renderMarkdown(event.content, pc.createColors(false)));
         break;
+      case "reasoning":
+        if (options.verbose) muted(zh ? "思考" : "Reasoning", renderMarkdown(event.content, pc.createColors(false)));
+        break;
+      case "assistant": {
+        const answer = renderMarkdown(event.content, colors);
+        if (!answer) break;
+        // Keep redirected stdout free of presentation labels for scripts.
+        const heading = process.stdout.isTTY
+          ? `\n${colors.bold(colors.cyan(zh ? "━━ 回答 ━━" : "━━ Answer ━━"))}\n\n`
+          : "";
+        process.stdout.write(`${heading}${answer}\n${process.stdout.isTTY ? "\n" : ""}`);
+        break;
+      }
       case "memory_used":
-        process.stderr.write(`${colors.dim(options.language === "zh-CN" ? `使用了 ${event.ids.length} 条本地记忆：${event.purpose}` : `Used ${event.ids.length} local memory fact(s): ${event.purpose}`)}\n`);
+        muted(zh ? "记忆" : "Memory", zh ? `使用了 ${event.ids.length} 条本地记忆：${event.purpose}` : `Used ${event.ids.length} local memory fact(s): ${event.purpose}`);
         break;
     }
   };

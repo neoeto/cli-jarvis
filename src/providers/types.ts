@@ -26,9 +26,10 @@ export interface ModelRequest {
   onTextDelta?: (delta: string) => void | Promise<void>;
 }
 
-export type ModelResponse =
+export type ModelResponse = { reasoning?: string } & (
   | { kind: "message"; content: string; streamed?: boolean }
-  | { kind: "tool_calls"; calls: ToolCall[]; content?: string };
+  | { kind: "tool_calls"; calls: ToolCall[]; content?: string }
+);
 
 export interface ModelProvider {
   readonly id: string;

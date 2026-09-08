@@ -200,6 +200,7 @@ export class AgentRuntime {
         requestSignal
       ), signal, this.options.modelTimeoutMs, "Model request");
 
+      if (response.reasoning) await emit({ type: "reasoning", content: response.reasoning });
       if (response.kind === "message") {
         messages.push({ role: "assistant", content: response.content });
         await emit({
@@ -210,6 +211,8 @@ export class AgentRuntime {
         await lifecycle("completed");
         return response.content;
       }
+
+      if (response.content) await emit({ type: "assistant_progress", content: response.content });
 
       const questionCalls = response.calls.filter((call) => call.name === "ask_question");
       if (questionCalls.length > 0 && response.calls.length !== 1) {

@@ -15,6 +15,8 @@ export type AgentEvent =
   | { type: "confirmation_batch_resolved"; actionIds: string[]; approved: boolean }
   | { type: "question_requested"; request: QuestionRequest }
   | { type: "question_resolved"; selectedCount: number; hasCustomInput: boolean }
+  | { type: "assistant_progress"; content: string }
+  | { type: "reasoning"; content: string }
   | { type: "assistant_delta"; content: string }
   | { type: "assistant"; content: string; streamed?: boolean }
   | { type: "memory_used"; ids: string[]; purpose: string };

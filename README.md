@@ -53,7 +53,7 @@ Useful options:
 
 ```text
 --json                  Emit versioned JSON Lines events
---verbose               Show detailed, redacted Tool results
+--verbose               Show reasoning and detailed, redacted Tool results
 --language zh-CN|en     Override the response language
 --timeout 30s           Lower the configured task timeout
 --plain                 Use readable output without terminal styling
@@ -63,9 +63,9 @@ Useful options:
 --profile NAME          Use a profile for this invocation without changing the default
 ```
 
-Human-readable assistant replies are rendered for the terminal: headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code blocks, and GFM tables are formatted instead of showing Markdown markers literally. JSONL mode keeps the original event payloads for automation.
+Human-readable assistant replies are rendered for the terminal: headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code blocks, and GFM tables are formatted instead of showing Markdown markers literally. In a terminal, replies have a separate **回答 / Answer** heading and normal-brightness body. Status, decisions, and successful Tool activity are indented and dimmed on stderr; failures and confirmation requests remain prominent. Provider-supplied `reasoning_content` is shown separately only with `--verbose`. Plain/no-color output retains text labels, and redirected stdout contains only replies. JSONL mode keeps event payloads for automation, including separate `assistant_progress` and `reasoning` events.
 
-`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode. When a task needs a material clarification, the model can call the built-in `ask_question` Tool: both interactive `cj "..."` and `cj chat` pause for one question, offer single-select or multi-select options plus free text, then continue the same task with the answer. JSON, redirected, and piped invocations fail with `INTERACTION_REQUIRED` after emitting the question event; they never guess an answer. Streamed replies render completed Markdown blocks progressively; unfinished code fences stay buffered so terminal layout remains intact.
+`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode. When a task needs a material clarification, the model can call the built-in `ask_question` Tool: both interactive `cj "..."` and `cj chat` pause for one question, offer single-select or multi-select options plus free text, then continue the same task with the answer. JSON, redirected, and piped invocations fail with `INTERACTION_REQUIRED` after emitting the question event; they never guess an answer. Human output waits for each model response to finish so text accompanying Tool calls can be classified as process information instead of an answer. JSONL mode continues to emit text deltas.
 
 ## Built-in Tools
 

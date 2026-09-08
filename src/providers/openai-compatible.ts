@@ -67,11 +67,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
         { signal }
       );
       let content = "";
+      let reasoning = "";
       const calls = new Map<number, { id: string; name: string; arguments: string }>();
       let streamed = false;
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
+        const reasoningContent = (delta as typeof delta & { reasoning_content?: unknown }).reasoning_content;
+        if (typeof reasoningContent === "string") reasoning += reasoningContent;
         if (delta.content) {
           content += delta.content;
           if (request.onTextDelta) {
@@ -98,6 +101,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }
         return {
           kind: "tool_calls",
+          ...(reasoning ? { reasoning } : {}),
           calls: normalized,
           ...(content ? { content } : {})
         };
@@ -105,7 +109,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       if (!content) {
         throw new CjError("MODEL_RESPONSE_INVALID", "Provider returned neither text nor Tool calls");
       }
-      return { kind: "message", content, streamed };
+      return { kind: "message", content, streamed, ...(reasoning ? { reasoning } : {}) };
     } catch (error) {
       if (error instanceof CjError) throw error;
       if (signal.aborted) throw new CjError("ABORTED", "Task aborted", { cause: error });
