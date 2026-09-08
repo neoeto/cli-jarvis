@@ -107,7 +107,7 @@ The versioned TypeScript contract is exported as `cli-jarvis/tools-sdk` (`TOOL_S
 
 ## Agent Skills
 
-CJ also supports standard local Agent Skills. A user-level Skill lives at `skills/<name>/SKILL.md` under CJ's configuration directory. A project can provide Skills in `.agent/skills/<name>/SKILL.md`, but CJ ignores them until you explicitly trust the exact current contents:
+CJ also supports standard local Agent Skills. A user-level Skill lives at `skills/<name>/SKILL.md` under CJ's configuration directory. A project can provide Skills in `.agents/skills/<name>/SKILL.md`, but CJ ignores them until you explicitly trust the exact current contents:
 
 ```bash
 cj skills trust

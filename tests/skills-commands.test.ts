@@ -33,7 +33,7 @@ describe("skills commands", () => {
     const workspace = await temporaryDirectory("cj-skills-workspace-");
     const configDirectory = await temporaryDirectory("cj-skills-config-");
     await writeSkill(path.join(configDirectory, "skills"), "user_flow", "User workflow");
-    const workspaceSkills = path.join(workspace, ".agent", "skills");
+    const workspaceSkills = path.join(workspace, ".agents", "skills");
     await writeSkill(workspaceSkills, "workspace_flow", "Workspace workflow");
     const entry = path.resolve("src/cli/index.ts");
     const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;

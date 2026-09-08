@@ -15,7 +15,7 @@ import {
   validateDraft
 } from "./model.js";
 
-type Section = "profiles" | "credentials" | "runtime" | "security" | "external" | "extensions" | "memory" | "skills";
+type Section = "profiles" | "credentials" | "web-search" | "runtime" | "security" | "external" | "extensions" | "memory" | "skills";
 type Focus = "sections" | "rows";
 
 interface Row {
@@ -53,6 +53,7 @@ export interface ConfigTuiAppProps {
 const sections: Array<{ id: Section; zh: string; en: string }> = [
   { id: "profiles", zh: "模型档案", en: "Profiles" },
   { id: "credentials", zh: "凭据", en: "Credentials" },
+  { id: "web-search", zh: "网络搜索", en: "Web search" },
   { id: "runtime", zh: "运行与界面", en: "Runtime & UI" },
   { id: "security", zh: "安全", en: "Security" },
   { id: "external", zh: "外部 CLI", en: "External CLI" },
@@ -188,6 +189,42 @@ export function ConfigTuiApp({ initial, onApply, validateExternalDirectory }: Co
           { label: tr("移除凭据", "Remove credential"), run: () => openConfirm({ title: tr("移除凭据", "Remove credential"), body: provider, accept: () => updateAuth((auth) => { const { [provider]: _removed, ...providers } = auth.providers; return { ...auth, providers }; }) }) }
         ] })
       }));
+    }
+
+    if (section === "web-search") {
+      const credential = draft.auth.providers.tavily;
+      return [
+        {
+          label: tr("启用 Tavily 网络搜索", "Enable Tavily web search"),
+          value: draft.config.webSearch.enabled ? tr("开启", "on") : tr("关闭", "off"),
+          hint: tr("每次搜索都会发送查询并要求确认", "Each search sends its query externally and requires confirmation"),
+          activate: () => {
+            if (!draft.config.webSearch.enabled && !credential) {
+              setStatus(tr("请先配置 Tavily 凭据", "Configure a Tavily credential first"));
+              return;
+            }
+            setDraft((current) => ({ ...current, config: { ...current.config, webSearch: { enabled: !current.config.webSearch.enabled } } }));
+          }
+        },
+        {
+          label: "Tavily API Key",
+          value: credentialSummary(draft.auth, "tavily", language),
+          hint: tr("密钥仅保存到受限 auth.json，或引用环境变量", "Store the key in protected auth.json or reference an environment variable"),
+          activate: () => setChoice({ title: "Tavily API Key", choices: [
+            { label: tr("保存 API Key", "Store API key"), run: () => openEditor({ title: "Tavily API Key", value: "", secret: true, submit: (value) => {
+              const key = value.trim();
+              if (!key) throw new Error(tr("API Key 不能为空", "API key is required"));
+              updateAuth((auth) => ({ ...auth, providers: { ...auth.providers, tavily: { type: "api_key", key } } }));
+            } }) },
+            { label: tr("使用环境变量", "Use environment variable"), run: () => openEditor({ title: tr("环境变量名", "Environment variable"), value: credential?.type === "env" ? credential.variable : "TAVILY_API_KEY", submit: (value) => {
+              const variable = value.trim();
+              if (!/^[A-Z_][A-Z0-9_]*$/.test(variable)) throw new Error(tr("环境变量必须为大写名称", "Environment variable must use uppercase naming"));
+              updateAuth((auth) => ({ ...auth, providers: { ...auth.providers, tavily: { type: "env", variable } } }));
+            } }) },
+            { label: tr("移除凭据", "Remove credential"), run: () => openConfirm({ title: tr("移除 Tavily 凭据", "Remove Tavily credential"), body: "tavily", accept: () => updateAuth((auth) => { const { tavily: _removed, ...providers } = auth.providers; return { ...auth, providers }; }) }) }
+          ] })
+        }
+      ];
     }
 
     if (section === "runtime") return [

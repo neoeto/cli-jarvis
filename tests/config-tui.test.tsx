@@ -64,6 +64,25 @@ describe("config TUI rendering", () => {
     app.unmount();
   });
 
+  it("shows a dedicated Tavily web-search settings page", async () => {
+    const app = render(<ConfigTuiApp
+      initial={createConfigDraft({ ...defaultConfig, webSearch: { enabled: true } }, {
+        version: 1,
+        providers: { tavily: { type: "env", variable: "TAVILY_API_KEY" } }
+      })}
+      validateExternalDirectory={async (value) => value}
+      onApply={async () => undefined}
+    />);
+    app.stdin.write("\u001b[B");
+    app.stdin.write("\u001b[B");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const frame = app.lastFrame() ?? "";
+    expect(frame).toContain("网络搜索");
+    expect(frame).toContain("启用 Tavily 网络搜索: 开启");
+    expect(frame).toContain("Tavily API Key: 环境变量: TAVILY_API_KEY");
+    app.unmount();
+  });
+
 
   it("rejects JSON/non-interactive invocation before writing settings", async () => {
     const entry = path.resolve("src/cli/index.ts");

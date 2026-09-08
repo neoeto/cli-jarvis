@@ -45,7 +45,7 @@ cj config list                Show configuration with secrets redacted
 cj tools list                 List registered Tools
 cj tools show <name>          Show Tool schema, behavior, and risk metadata
 cj skills list                List available local Agent Skills
-cj skills trust               Trust this workspace's .agent/skills content
+cj skills trust               Trust this workspace's .agents/skills content
 cj skills show <name>         Show a Skill's metadata and redacted instructions
 cj skills doctor              Validate Skills and workspace trust state
 cj history                    Show local audit history
@@ -69,7 +69,7 @@ There is deliberately no global `--yes`, permanent trust switch, or automatic `s
 
 ### 2.1.1 Agent Skills
 
-Skills are local, standard `SKILL.md` instruction packages rather than executable Tool plugins. CJ discovers user Skills at `$CJ_CONFIG_DIR/skills/<name>/SKILL.md`; a workspace may supply `.agent/skills/<name>/SKILL.md` only after `cj skills trust` records a content fingerprint. A trusted workspace package overrides a same-named user package, while any package file change revokes that workspace trust until it is renewed.
+Skills are local, standard `SKILL.md` instruction packages rather than executable Tool plugins. CJ discovers user Skills at `$CJ_CONFIG_DIR/skills/<name>/SKILL.md`; a workspace may supply `.agents/skills/<name>/SKILL.md` only after `cj skills trust` records a content fingerprint. A trusted workspace package overrides a same-named user package, while any package file change revokes that workspace trust until it is renewed.
 
 The system prompt includes only each available Skill's name, description, and source. When relevant, the model calls the low-risk `read_skill` Tool to fetch the redacted `SKILL.md` or a bounded UTF-8 resource inside that same package. Package paths cannot escape their real directory or contain symbolic links. Skills cannot auto-run scripts or weaken the host's path, confirmation, timeout, output, or audit controls.
 

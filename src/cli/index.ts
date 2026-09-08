@@ -115,7 +115,7 @@ async function configureExtensions(config: AppConfig): Promise<void> {
 async function configureSkills(config: AppConfig, workspaceRoot: string): Promise<SkillCatalog> {
   const catalog = await discoverSkills({
     userDirectory: store.paths.skillsDir,
-    workspaceDirectory: path.join(workspaceRoot, ".agent", "skills"),
+    workspaceDirectory: path.join(workspaceRoot, ".agents", "skills"),
     trustedWorkspaceDirectories: config.skills.trustedWorkspaceDirectories
   });
   registry.removeByOrigin("skill");

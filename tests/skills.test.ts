@@ -34,7 +34,7 @@ describe("Agent Skills", () => {
   it("merges trusted workspace Skills over user Skills without exposing untrusted workspace Skills", async () => {
     const root = await temporaryDirectory();
     const user = path.join(root, "user");
-    const workspace = path.join(root, "workspace", ".agent", "skills");
+    const workspace = path.join(root, "workspace", ".agents", "skills");
     await writeSkill(user, "review", "review", "User workflow", "user instructions");
     await writeSkill(workspace, "review", "review", "Workspace workflow", "workspace instructions");
     await writeSkill(workspace, "private", "private", "Workspace-only workflow");
@@ -54,7 +54,7 @@ describe("Agent Skills", () => {
   it("invalidates workspace trust when any package resource changes", async () => {
     const root = await temporaryDirectory();
     const user = path.join(root, "user");
-    const workspace = path.join(root, "workspace", ".agent", "skills");
+    const workspace = path.join(root, "workspace", ".agents", "skills");
     const skill = await writeSkill(workspace, "deploy", "deploy");
     await mkdir(path.join(skill, "references"));
     await writeFile(path.join(skill, "references", "guide.md"), "first version");
@@ -72,7 +72,7 @@ describe("Agent Skills", () => {
     await mkdir(path.join(skill, "references"));
     await writeFile(path.join(skill, "references", "checks.md"), "token: abcdefghijkl\nship it");
     await writeFile(path.join(skill, "binary.bin"), Buffer.from([1, 0, 2]));
-    const catalog = await discoverSkills({ userDirectory: user, workspaceDirectory: path.join(root, "workspace", ".agent", "skills"), trustedWorkspaceDirectories: [] });
+    const catalog = await discoverSkills({ userDirectory: user, workspaceDirectory: path.join(root, "workspace", ".agents", "skills"), trustedWorkspaceDirectories: [] });
     const tool = new ReadSkillTool();
     const action = await tool.prepare(tool.parse({ name: "release", path: "references/checks.md" }), context(catalog));
     const result = await tool.execute(action, context(catalog));
@@ -85,7 +85,7 @@ describe("Agent Skills", () => {
     const root = await temporaryDirectory();
     const user = path.join(root, "user");
     const skillDirectory = await writeSkill(user, "changes", "changes");
-    const catalog = await discoverSkills({ userDirectory: user, workspaceDirectory: path.join(root, "workspace", ".agent", "skills"), trustedWorkspaceDirectories: [] });
+    const catalog = await discoverSkills({ userDirectory: user, workspaceDirectory: path.join(root, "workspace", ".agents", "skills"), trustedWorkspaceDirectories: [] });
     await writeFile(path.join(skillDirectory, "SKILL.md"), "---\nname: changes\ndescription: Useful test guidance\n---\nchanged\n");
     await expect(readSkillResource(catalog.skills[0]!)).rejects.toMatchObject({ code: "TOOL_FAILED" });
   });
@@ -94,7 +94,7 @@ describe("Agent Skills", () => {
     const root = await temporaryDirectory();
     const user = path.join(root, "user");
     const skillDirectory = await writeSkill(user, "private_plan", "private_plan", "Private planning workflow", "DO NOT EXPOSE THIS BODY");
-    const catalog = await discoverSkills({ userDirectory: user, workspaceDirectory: path.join(root, "workspace", ".agent", "skills"), trustedWorkspaceDirectories: [] });
+    const catalog = await discoverSkills({ userDirectory: user, workspaceDirectory: path.join(root, "workspace", ".agents", "skills"), trustedWorkspaceDirectories: [] });
     const prompt = createSystemPrompt(root, "en", catalog.skills);
     expect(prompt).toContain("private_plan");
     expect(prompt).not.toContain("DO NOT EXPOSE THIS BODY");
