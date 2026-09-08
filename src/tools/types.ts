@@ -1,5 +1,6 @@
 import type { ModelToolDefinition } from "../providers/types.js";
 import type { SkillCatalog } from "../skills/catalog.js";
+import type { QuestionHandler } from "../agent/questions.js";
 
 export type RiskLevel = "low" | "medium" | "high";
 export type EffectKind = "read" | "write" | "move" | "trash" | "delete" | "process" | "network" | "git";
@@ -15,6 +16,8 @@ export interface ToolContext {
   dryRun?: boolean;
   /** Host-validated Skill catalog available to the built-in read_skill Tool. */
   skillCatalog?: SkillCatalog;
+  /** Host-owned interactive clarification handler available only on a TTY. */
+  askQuestion?: QuestionHandler;
 }
 
 export interface RecoveryInfo {

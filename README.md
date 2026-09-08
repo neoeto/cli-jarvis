@@ -62,7 +62,7 @@ Useful options:
 
 Human-readable assistant replies are rendered for the terminal: headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code blocks, and GFM tables are formatted instead of showing Markdown markers literally. JSONL mode keeps the original event payloads for automation.
 
-`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode. Streamed replies render completed Markdown blocks progressively; unfinished code fences stay buffered so terminal layout remains intact.
+`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode. When a task needs a material clarification, the model can call the built-in `ask_question` Tool: both interactive `cj "..."` and `cj chat` pause for one question, offer single-select or multi-select options plus free text, then continue the same task with the answer. JSON, redirected, and piped invocations fail with `INTERACTION_REQUIRED` after emitting the question event; they never guess an answer. Streamed replies render completed Markdown blocks progressively; unfinished code fences stay buffered so terminal layout remains intact.
 
 ## Built-in Tools
 
@@ -76,6 +76,7 @@ Human-readable assistant replies are rendered for the terminal: headings, emphas
 | `trash_files` | Move targets to the operating-system trash/recycle bin |
 | `run_command` | Run an explicitly previewed process or shell command |
 | `git` | Structured status, diff, log, add, and commit operations |
+| `ask_question` | Pause one task for a material user clarification, with choices and free text |
 
 Inspect the exact schemas and risk declarations with:
 

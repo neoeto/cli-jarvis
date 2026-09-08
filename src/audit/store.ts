@@ -94,6 +94,14 @@ function auditDataForAgentEvent(event: AgentEvent): Record<string, unknown> {
       };
     case "confirmation_batch_resolved":
       return { actionCount: event.actionIds.length, approved: event.approved };
+    case "question_requested":
+      return {
+        questionLength: event.request.question.length,
+        optionCount: event.request.options.length,
+        multiple: event.request.multiple
+      };
+    case "question_resolved":
+      return { selectedCount: event.selectedCount, hasCustomInput: event.hasCustomInput };
     case "assistant_delta":
       return { deltaLength: event.content.length };
     case "assistant":

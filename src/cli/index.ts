@@ -38,6 +38,8 @@ import { addCompletionCommand } from "./completion.js";
 import { addSkillsCommand } from "./commands/skills.js";
 import { discoverSkills, type SkillCatalog } from "../skills/catalog.js";
 import { ReadSkillTool } from "../tools/builtins/read-skill.js";
+import { AskQuestionTool } from "../tools/builtins/ask-question.js";
+import { createTerminalQuestion } from "./question.js";
 import path from "node:path";
 
 const CLI_VERSION = "1.0.0";
@@ -53,7 +55,8 @@ const registry = new ToolRegistry()
   .register(new MoveFilesTool())
   .register(new TrashFilesTool())
   .register(new RunCommandTool())
-  .register(new GitTool());
+  .register(new GitTool())
+  .register(new AskQuestionTool());
 
 interface CliOptions {
   json?: boolean;
@@ -84,6 +87,7 @@ interface ExecuteTaskOptions {
   taskEvents?: boolean;
   messages?: AgentMessage[];
   isTimedOut?: () => boolean;
+  onQuestionWaiting?: (waiting: boolean) => void;
   maxToolCalls?: number;
   onToolExecuted?: () => void;
   sessionId?: string;
@@ -204,6 +208,8 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
       ...(options.messages ? { messages: options.messages } : {}),
       interactive: options.interactive,
       confirm: createTerminalConfirmation(options.language),
+      ...(options.interactive ? { askQuestion: createTerminalQuestion(options.language) } : {}),
+      ...(options.onQuestionWaiting ? { onQuestionWaiting: options.onQuestionWaiting } : {}),
       policy: new PolicyEngine({ workspaceRoot: options.workspaceRoot, allowedRoots }),
       onEvent: async (event) => {
         if ((event.type !== "task_status" && event.type !== "task_step") || options.taskEvents) await renderer(event);
@@ -231,21 +237,48 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
 }
 
 async function executeTaskWithController(
-  options: Omit<ExecuteTaskOptions, "signal" | "isTimedOut"> & { controller: AbortController }
+  options: Omit<ExecuteTaskOptions, "signal" | "isTimedOut" | "onQuestionWaiting"> & { controller: AbortController }
 ): Promise<string> {
   let timedOut = false;
-  const timeout = setTimeout(() => {
+  let remainingMs = options.timeoutMs;
+  let startedAt = performance.now();
+  let timeout: NodeJS.Timeout | undefined;
+  let paused = false;
+  const expire = () => {
     timedOut = true;
     options.controller.abort(new Error("Task timeout"));
-  }, options.timeoutMs);
+  };
+  const armTimeout = () => {
+    if (timedOut || paused) return;
+    if (remainingMs <= 0) {
+      expire();
+      return;
+    }
+    startedAt = performance.now();
+    timeout = setTimeout(expire, remainingMs);
+  };
+  const setQuestionWaiting = (waiting: boolean) => {
+    if (waiting === paused || timedOut) return;
+    if (waiting) {
+      remainingMs = Math.max(0, remainingMs - (performance.now() - startedAt));
+      if (timeout) clearTimeout(timeout);
+      timeout = undefined;
+      paused = true;
+      return;
+    }
+    paused = false;
+    armTimeout();
+  };
+  armTimeout();
   try {
     return await executeTask({
       ...options,
       signal: options.controller.signal,
-      isTimedOut: () => timedOut
+      isTimedOut: () => timedOut,
+      onQuestionWaiting: setQuestionWaiting
     });
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -386,6 +419,8 @@ program
             onToolExecuted: () => { retryToolCalls += 1; },
             sessionId,
             interactive: true,
+            // The question UI owns stdin only while a model-requested
+            // clarification is pending, then the chat readline loop resumes.
             messages: draft
           });
           transcript.splice(0, transcript.length, ...draft);
@@ -494,6 +529,8 @@ program.parseAsync(process.argv).catch((error: unknown) => {
     normalized.code === "AUTH_MISSING" || normalized.code === "PROVIDER_UNAVAILABLE"
       ? 3
       : normalized.code === "CONFIRMATION_REQUIRED" || normalized.code === "CONFIRMATION_REJECTED"
+      ? 4
+      : normalized.code === "INTERACTION_REQUIRED"
         ? 4
       : normalized.code === "ABORTED"
           ? 130

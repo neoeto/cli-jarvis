@@ -147,6 +147,13 @@ export function createHumanRenderer(options: {
       case "confirmation_batch_resolved":
         process.stderr.write(`${event.approved ? colors.green(options.language === "zh-CN" ? `✓ 已批准 ${event.actionIds.length} 个操作` : `✓ Approved ${event.actionIds.length} operations`) : colors.red(options.language === "zh-CN" ? "✗ 未批准操作批次" : "✗ Operation batch not approved")}\n`);
         break;
+      case "question_requested":
+        // The terminal question handler renders the interactive control. Keep
+        // this semantic event silent to avoid printing the question twice.
+        break;
+      case "question_resolved":
+        process.stderr.write(`${colors.green(options.language === "zh-CN" ? "✓ 已收到回答" : "✓ Answer received")}\n`);
+        break;
       case "assistant_delta":
         sawStreamDelta = true;
         streamedMarkdown += event.content;

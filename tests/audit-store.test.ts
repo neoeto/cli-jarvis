@@ -53,6 +53,23 @@ describe("AuditStore", () => {
     if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
+  it("records clarification metadata without the user's answer", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(directory);
+    const store = new AuditStore(path.join(directory, "history.jsonl"));
+    const task = store.createTaskContext({ cliVersion: "test", cwd: directory, provider: "fake", model: "fake", promptHash: "hash" });
+    await store.taskStarted(task);
+    await store.agentEvent(task.taskId, {
+      type: "question_requested",
+      request: { question: "What is the secret?", options: [{ label: "A" }], multiple: false }
+    });
+    await store.agentEvent(task.taskId, { type: "question_resolved", selectedCount: 1, hasCustomInput: true });
+    const text = await readFile(store.file, "utf8");
+    expect(text).not.toContain("What is the secret?");
+    expect(text).toContain("questionLength");
+    expect(text).toContain("hasCustomInput");
+  });
+
   it("returns an empty history when the file does not exist", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
     created.push(root);

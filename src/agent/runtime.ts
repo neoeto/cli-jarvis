@@ -8,6 +8,7 @@ import type { EventSink } from "./events.js";
 import { createSystemPrompt } from "./system-prompt.js";
 import type { TaskStatus } from "./events.js";
 import type { SkillCatalog } from "../skills/catalog.js";
+import type { QuestionHandler, QuestionRequest } from "./questions.js";
 
 export interface AgentRuntimeOptions {
   provider: ModelProvider;
@@ -36,6 +37,9 @@ export interface AgentRuntimeOptions {
   messages?: AgentMessage[];
   interactive?: boolean;
   confirm?: ConfirmationHandler;
+  askQuestion?: QuestionHandler;
+  /** Pause/resume the host's active-task watchdog around human input. */
+  onQuestionWaiting?: (waiting: boolean) => void;
   policy?: PolicyEngine;
   onEvent?: EventSink;
 }
@@ -116,15 +120,6 @@ export class AgentRuntime {
     const policy = this.options.policy ?? new PolicyEngine();
     const messages = this.messages;
     messages.push({ role: "user", content: prompt });
-    const context: ToolContext = {
-      workspaceRoot,
-      signal,
-      language,
-      ...(this.options.toolTimeoutMs === undefined ? {} : { toolTimeoutMs: this.options.toolTimeoutMs }),
-      ...(this.options.maxOutputBytes === undefined ? {} : { maxOutputBytes: this.options.maxOutputBytes }),
-      ...(this.options.dryRun === undefined ? {} : { dryRun: this.options.dryRun }),
-      ...(this.options.skillCatalog === undefined ? {} : { skillCatalog: this.options.skillCatalog })
-    };
     let executedCalls = 0;
     let invalidRounds = 0;
     let outputBytes = 0;
@@ -144,6 +139,35 @@ export class AgentRuntime {
       if (this.options.emitLifecycle && this.options.taskId) {
         await emit({ type: "task_step", taskId: this.options.taskId, stepId, tool, status, dependsOn, ...(detail ? { detail } : {}) });
       }
+    };
+    const askQuestion = async (request: QuestionRequest, questionSignal: AbortSignal) => {
+      await lifecycle("waiting_question", "ask_question");
+      await emit({ type: "question_requested", request });
+      if (!this.options.interactive || !this.options.askQuestion) {
+        throw new CjError("INTERACTION_REQUIRED", "The model requested user input, but this command is not running in an interactive terminal");
+      }
+      this.options.onQuestionWaiting?.(true);
+      try {
+        const answer = await this.options.askQuestion(request, questionSignal);
+        await emit({
+          type: "question_resolved",
+          selectedCount: answer.selected.length,
+          hasCustomInput: Boolean(answer.custom)
+        });
+        return answer;
+      } finally {
+        this.options.onQuestionWaiting?.(false);
+      }
+    };
+    const context: ToolContext = {
+      workspaceRoot,
+      signal,
+      language,
+      ...(this.options.toolTimeoutMs === undefined ? {} : { toolTimeoutMs: this.options.toolTimeoutMs }),
+      ...(this.options.maxOutputBytes === undefined ? {} : { maxOutputBytes: this.options.maxOutputBytes }),
+      ...(this.options.dryRun === undefined ? {} : { dryRun: this.options.dryRun }),
+      ...(this.options.skillCatalog === undefined ? {} : { skillCatalog: this.options.skillCatalog }),
+      askQuestion
     };
 
     await emit({ type: "status", message: language === "zh-CN" ? "正在理解任务…" : "Understanding task…" });
@@ -183,6 +207,28 @@ export class AgentRuntime {
         });
         await lifecycle("completed");
         return response.content;
+      }
+
+      const questionCalls = response.calls.filter((call) => call.name === "ask_question");
+      if (questionCalls.length > 0 && response.calls.length !== 1) {
+        const reason = "ask_question must be the only Tool call in a model response";
+        messages.push({
+          role: "assistant",
+          content: response.content ?? null,
+          toolCalls: response.calls
+        });
+        for (const [callIndex, call] of response.calls.entries()) {
+          messages.push({
+            role: "tool",
+            toolCallId: call.id || `call-${callIndex}`,
+            content: serializableResult({ success: false, message: reason, effects: [] })
+          });
+        }
+        invalidRounds += 1;
+        if (invalidRounds >= 3) {
+          throw new CjError("LIMIT_EXCEEDED", "The model produced invalid Tool calls in three consecutive turns");
+        }
+        continue;
       }
 
       messages.push({
@@ -310,7 +356,10 @@ export class AgentRuntime {
           result = await bounded(
             (toolSignal) => tool.execute(action, { ...context, signal: toolSignal }),
             signal,
-            this.options.toolTimeoutMs,
+            // Clarifications wait for a human, not an external operation.
+            // They remain covered by the enclosing task timeout and Ctrl+C,
+            // but must not inherit the per-Tool execution limit.
+            call.name === "ask_question" ? undefined : this.options.toolTimeoutMs,
             `Tool ${call.name}`
           );
           executedCalls += 1;
@@ -321,14 +370,17 @@ export class AgentRuntime {
             success: result.success,
             message: result.message,
             durationMs: Math.round(performance.now() - callStartedAt),
-            ...(result.data === undefined ? {} : { data: result.data }),
+            // A clarification answer must reach the model in the Tool result,
+            // but it is user-entered content and must not leak through the
+            // public event stream or verbose renderer.
+            ...(result.data === undefined || call.name === "ask_question" ? {} : { data: result.data }),
             ...(result.recovery === undefined ? {} : { recovery: result.recovery })
           });
           await step(stepId, call.name, result.success ? "completed" : "failed", dependencies, result.message);
         } catch (error) {
           if (
             error instanceof CjError &&
-            ["CONFIRMATION_REQUIRED", "CONFIRMATION_REJECTED", "ABORTED"].includes(error.code)
+            ["CONFIRMATION_REQUIRED", "CONFIRMATION_REJECTED", "INTERACTION_REQUIRED", "ABORTED"].includes(error.code)
           ) {
             await step(stepId, call.name, "failed", dependencies, error.message);
             throw error;

@@ -7,6 +7,7 @@ import { AgentRuntime } from "../src/agent/runtime.js";
 import type { AgentEvent } from "../src/agent/events.js";
 import type { AgentMessage, ModelProvider, ModelRequest, ModelResponse } from "../src/providers/types.js";
 import { ListFilesTool } from "../src/tools/builtins/list-files.js";
+import { AskQuestionTool } from "../src/tools/builtins/ask-question.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { PreparedAction, Tool, ToolContext, ToolResult } from "../src/tools/types.js";
 import type { ConfirmationHandler } from "../src/policy/engine.js";
@@ -96,6 +97,177 @@ describe("AgentRuntime", () => {
       role: "assistant",
       content: "目录中有一个文件：hello.txt"
     });
+  });
+
+  it("returns a host-collected clarification answer to the model and continues the same task", async () => {
+    class ClarifyingProvider implements ModelProvider {
+      readonly id = "fake";
+      calls = 0;
+      lastRequest?: Omit<ModelRequest, "onTextDelta">;
+      async complete(request: ModelRequest): Promise<ModelResponse> {
+        this.calls += 1;
+        const { onTextDelta: _onTextDelta, ...serializableRequest } = request;
+        this.lastRequest = structuredClone(serializableRequest);
+        return this.calls === 1
+          ? {
+              kind: "tool_calls",
+              calls: [{
+                id: "question-1",
+                name: "ask_question",
+                arguments: JSON.stringify({
+                  question: "Which format should I use?",
+                  options: [{ label: "Markdown" }, { label: "Plain text" }]
+                })
+              }]
+            }
+          : { kind: "message", content: "I will use Markdown." };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    const provider = new ClarifyingProvider();
+    const events: AgentEvent[] = [];
+    const waiting: boolean[] = [];
+    const runtime = new AgentRuntime({
+      provider,
+      model: "fake-model",
+      registry: new ToolRegistry().register(new AskQuestionTool()),
+      workspaceRoot: root,
+      language: "en",
+      maxToolCalls: 20,
+      interactive: true,
+      askQuestion: async () => ({ selected: ["Markdown"], answer: "Selected options: Markdown" }),
+      onQuestionWaiting: (value) => waiting.push(value),
+      signal: new AbortController().signal,
+      onEvent: (event) => events.push(event)
+    });
+
+    await expect(runtime.run("prepare a document")).resolves.toBe("I will use Markdown.");
+    expect(provider.calls).toBe(2);
+    expect(JSON.stringify(provider.lastRequest?.messages.at(-1))).toContain("Selected options: Markdown");
+    expect(events).toContainEqual(expect.objectContaining({ type: "question_requested" }));
+    expect(events).toContainEqual({ type: "question_resolved", selectedCount: 1, hasCustomInput: false });
+    expect(JSON.stringify(events)).not.toContain("Selected options: Markdown");
+    expect(waiting).toEqual([true, false]);
+  });
+
+  it("requires ask_question to be the only Tool call in its response", async () => {
+    class MixedQuestionProvider implements ModelProvider {
+      readonly id = "fake";
+      calls = 0;
+      requests: Array<Omit<ModelRequest, "onTextDelta">> = [];
+      async complete(request: ModelRequest): Promise<ModelResponse> {
+        this.calls += 1;
+        const { onTextDelta: _onTextDelta, ...serializableRequest } = request;
+        this.requests.push(structuredClone(serializableRequest));
+        if (this.calls === 1) {
+          return {
+            kind: "tool_calls",
+            calls: [
+              { id: "question", name: "ask_question", arguments: '{"question":"Choose one"}' },
+              { id: "list", name: "list_files", arguments: '{"path":"."}' }
+            ]
+          };
+        }
+        if (this.calls === 2) {
+          return { kind: "tool_calls", calls: [{ id: "question-2", name: "ask_question", arguments: '{"question":"Choose one"}' }] };
+        }
+        return { kind: "message", content: "Done." };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    const provider = new MixedQuestionProvider();
+    const runtime = new AgentRuntime({
+      provider,
+      model: "fake-model",
+      registry: new ToolRegistry().register(new AskQuestionTool()).register(new ListFilesTool()),
+      workspaceRoot: root,
+      language: "en",
+      maxToolCalls: 20,
+      interactive: true,
+      askQuestion: async () => ({ selected: [], custom: "A", answer: "A" }),
+      signal: new AbortController().signal
+    });
+
+    await expect(runtime.run("do work")).resolves.toBe("Done.");
+    expect(provider.calls).toBe(3);
+    const correctionRequest = provider.requests[1];
+    expect(correctionRequest?.messages.filter((message) => message.role === "tool")).toHaveLength(2);
+    expect(JSON.stringify(correctionRequest)).toContain("ask_question must be the only Tool call");
+  });
+
+  it("fails closed after emitting a clarification event without an interactive terminal", async () => {
+    class QuestionProvider implements ModelProvider {
+      readonly id = "fake";
+      async complete(): Promise<ModelResponse> {
+        return { kind: "tool_calls", calls: [{ id: "question", name: "ask_question", arguments: '{"question":"Continue?"}' }] };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    const events: AgentEvent[] = [];
+    const runtime = new AgentRuntime({
+      provider: new QuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()),
+      workspaceRoot: root, language: "en", maxToolCalls: 20, interactive: false,
+      signal: new AbortController().signal, onEvent: (event) => events.push(event)
+    });
+
+    await expect(runtime.run("do work")).rejects.toMatchObject({ code: "INTERACTION_REQUIRED" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "question_requested" }));
+    expect(events.some((event) => event.type === "question_resolved")).toBe(false);
+  });
+
+  it("does not open a clarification UI during dry-run", async () => {
+    class DryQuestionProvider implements ModelProvider {
+      readonly id = "fake";
+      calls = 0;
+      async complete(): Promise<ModelResponse> {
+        this.calls += 1;
+        return this.calls === 1
+          ? { kind: "tool_calls", calls: [{ id: "question", name: "ask_question", arguments: '{"question":"Continue?"}' }] }
+          : { kind: "message", content: "Preview complete." };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    const events: AgentEvent[] = [];
+    const runtime = new AgentRuntime({
+      provider: new DryQuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()),
+      workspaceRoot: root, language: "en", maxToolCalls: 20, interactive: true, dryRun: true,
+      askQuestion: async () => { throw new Error("Question UI must not open in dry-run"); },
+      signal: new AbortController().signal, onEvent: (event) => events.push(event)
+    });
+
+    await expect(runtime.run("do work")).resolves.toBe("Preview complete.");
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool_preview", name: "ask_question" }));
+    expect(events.some((event) => event.type === "question_requested")).toBe(false);
+  });
+
+  it("does not apply the per-Tool timeout while waiting for a clarification", async () => {
+    class SlowQuestionProvider implements ModelProvider {
+      readonly id = "fake";
+      calls = 0;
+      async complete(): Promise<ModelResponse> {
+        this.calls += 1;
+        return this.calls === 1
+          ? { kind: "tool_calls", calls: [{ id: "question", name: "ask_question", arguments: '{"question":"Continue?"}' }] }
+          : { kind: "message", content: "Continued." };
+      }
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
+    created.push(root);
+    const runtime = new AgentRuntime({
+      provider: new SlowQuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()),
+      workspaceRoot: root, language: "en", maxToolCalls: 20, interactive: true, toolTimeoutMs: 1,
+      askQuestion: async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        return { selected: [], custom: "yes", answer: "yes" };
+      },
+      signal: new AbortController().signal
+    });
+
+    await expect(runtime.run("do work")).resolves.toBe("Continued.");
   });
 
   it("returns invalid Tool arguments to the model without executing", async () => {

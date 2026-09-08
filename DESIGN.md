@@ -97,6 +97,7 @@ Human-readable assistant messages are rendered as terminal Markdown after the co
 - Ambiguous high-risk requests must be clarified rather than guessed.
 - `Ctrl+C` aborts the current task and prevents new Tool calls.
 - In a non-interactive terminal, any required confirmation fails closed.
+- When a task needs a material clarification, the model calls `ask_question`; the host renders it and returns the answer to the same task. Non-interactive use fails with `INTERACTION_REQUIRED`.
 
 ## 3. System architecture
 
@@ -290,7 +291,7 @@ Multiple Tool calls returned in one model response are deliberately executed seq
 
 ### 6.3 Clarification
 
-The model asks a question only when a missing answer materially changes targets or side effects. A clarification is emitted as a first-class event and the answer is appended as a user message.
+The model asks a question only when a missing answer materially changes targets or side effects. It calls the low-risk `ask_question` Tool alone rather than ending ordinary text with a question. The host emits a first-class clarification event, presents up to eight single- or multi-select choices plus a free-text alternative, and returns the structured answer to the model as a Tool result. Answers are never written to audit history. In a non-interactive terminal this Tool emits its request event then fails closed with `INTERACTION_REQUIRED`.
 
 ## 7. Tool contract
 

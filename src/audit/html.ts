@@ -56,6 +56,8 @@ function eventLabel(event: string): string {
     confirmation_resolved: "确认结果",
     confirmation_batch_requested: "批量确认请求",
     confirmation_batch_resolved: "批量确认结果",
+    question_requested: "请求澄清",
+    question_resolved: "已收到澄清",
     assistant_delta: "助手流式输出",
     assistant: "助手响应",
     status: "状态",

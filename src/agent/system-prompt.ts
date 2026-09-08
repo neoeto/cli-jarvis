@@ -15,6 +15,7 @@ export function createSystemPrompt(workspaceRoot: string, language: "zh-CN" | "e
     "Use list_files and search_files only with directories. Use read_file for the contents of a file; listing a file only returns metadata, not its contents.",
     "Treat a Tool error as structured feedback. On the next model turn, correct the Tool choice or arguments instead of repeating the same invalid call.",
     "Only use registered Tools. The host independently validates every call.",
+    "When a missing answer would materially change targets or side effects, call ask_question instead of ending normal text with a question. Ask exactly one clear question at a time, and never combine ask_question with any other Tool call. The user may choose listed options or enter their own answer.",
     `The authorized workspace is ${JSON.stringify(workspaceRoot)}.`,
     `Reply to the user in ${language === "zh-CN" ? "Chinese" : "English"}.`,
     "When the task is complete, briefly report the outcome and any important limitation.",
