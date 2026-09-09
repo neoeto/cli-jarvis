@@ -229,6 +229,7 @@ See [ROADMAP.md](./ROADMAP.md) for post-MVP feature planning, with improved inte
 cj tools register kubectl
 cj tools registrations
 cj tools list
+cj tools list --page 2 --page-size 20
 cj tools doctor
 cj tools unregister kubectl
 ```
@@ -247,4 +248,4 @@ cj --profile work tools refresh   # 使用另一个 Profile 审核
 cj tools show <generated-tool-name>
 ```
 
-`tools list`、`tools show`、`tools registrations` 和 `tools doctor` 只读取当前 PATH 与缓存，不会启动外部 CLI 或调用模型。审核缓存位于本地状态目录的 `external-cli-cache/`，与审计历史分离。所有批准后的外部 Tool 固定可执行文件和子命令路径、验证 argv，并继承确认、取消、超时、输出限制、脱敏和审计；每一次执行仍需要交互确认。
+`tools list` 以表格展示能力，默认每页 20 项；可通过 `--page` 和 `--page-size`（1 到 100）查看指定页，表格底部会显示页码、总数和每页数量。`tools list`、`tools show`、`tools registrations` 和 `tools doctor` 只读取当前 PATH 与缓存，不会启动外部 CLI 或调用模型。审核缓存位于本地状态目录的 `external-cli-cache/`，与审计历史分离。所有批准后的外部 Tool 固定可执行文件和子命令路径、验证 argv，并继承确认、取消、超时、输出限制、脱敏和审计；每一次执行仍需要交互确认。

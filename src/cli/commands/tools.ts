@@ -5,6 +5,101 @@ import type { ToolRegistry } from "../../tools/registry.js";
 import type { ConfigStore } from "../../config/store.js";
 import { discoverLocalTools } from "../../tools/extensions.js";
 import { CjError } from "../../shared/errors.js";
+import displayWidth from "string-width";
+
+export interface ToolListRow {
+  name: string;
+  risk: string;
+  source: string;
+  description: string;
+}
+
+export interface ToolListPage {
+  rows: readonly ToolListRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+const DEFAULT_TOOL_LIST_PAGE_SIZE = 20;
+const MAX_TOOL_LIST_PAGE_SIZE = 100;
+
+function positiveInteger(value: string | number | undefined, label: string, maximum: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new CjError("CONFIG_INVALID", `${label} must be an integer between 1 and ${maximum}`);
+  }
+  return parsed;
+}
+
+/** Select one page of tools, validating the CLI's pagination arguments. */
+export function paginateToolRows(
+  rows: readonly ToolListRow[],
+  pageValue: string | number | undefined = 1,
+  pageSizeValue: string | number | undefined = DEFAULT_TOOL_LIST_PAGE_SIZE
+): ToolListPage {
+  const page = positiveInteger(pageValue, "page", Number.MAX_SAFE_INTEGER);
+  const pageSize = positiveInteger(pageSizeValue, "page-size", MAX_TOOL_LIST_PAGE_SIZE);
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (page > totalPages) {
+    throw new CjError("CONFIG_INVALID", `page ${page} is outside the available range 1-${totalPages}`);
+  }
+  const start = (page - 1) * pageSize;
+  return { rows: rows.slice(start, start + pageSize), page, pageSize, total, totalPages };
+}
+
+export function formatToolListPage(page: ToolListPage, terminalWidth = 120): string {
+  const table = formatToolTable(page.rows, terminalWidth);
+  return `${table}\n\nPage ${page.page}/${page.totalPages} · ${page.total} tools · ${page.pageSize} per page`;
+}
+
+function compact(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateCell(value: string, width: number): string {
+  if (displayWidth(value) <= width) return value;
+  if (width <= 1) return "…";
+  let result = "";
+  let used = 0;
+  for (const character of Array.from(value)) {
+    const characterWidth = displayWidth(character);
+    if (used + characterWidth > width - 1) break;
+    result += character;
+    used += characterWidth;
+  }
+  return `${result}…`;
+}
+
+function padCell(value: string, width: number): string {
+  const clipped = truncateCell(compact(value), width);
+  return `${clipped}${" ".repeat(Math.max(0, width - displayWidth(clipped)))}`;
+}
+
+/** Render a stable, terminal-width-aware table for `cj tools list`. */
+export function formatToolTable(rows: readonly ToolListRow[], terminalWidth = 120): string {
+  if (rows.length === 0) return "No Tools are available.";
+  const width = Math.max(80, Math.min(160, terminalWidth));
+  const riskWidth = 6;
+  const sourceWidth = 16;
+  const gutterWidth = 6;
+  const descriptionMinimum = 28;
+  const nameWidth = Math.min(48, Math.max(24, width - riskWidth - sourceWidth - gutterWidth - descriptionMinimum));
+  const descriptionWidth = width - nameWidth - riskWidth - sourceWidth - gutterWidth;
+  const line = `${"-".repeat(nameWidth)}  ${"-".repeat(riskWidth)}  ${"-".repeat(sourceWidth)}  ${"-".repeat(descriptionWidth)}`;
+  const header = `${padCell("NAME", nameWidth)}  ${padCell("RISK", riskWidth)}  ${padCell("SOURCE", sourceWidth)}  ${padCell("DESCRIPTION", descriptionWidth)}`;
+  return [
+    header,
+    line,
+    ...rows.map((row) => `${padCell(row.name, nameWidth)}  ${padCell(row.risk, riskWidth)}  ${padCell(row.source, sourceWidth)}  ${truncateCell(compact(row.description), descriptionWidth)}`)
+  ].join("\n");
+}
+
+function toolsListWidth(): number {
+  return process.stdout.isTTY && typeof process.stdout.columns === "number" ? process.stdout.columns : 120;
+}
 
 export function addToolsCommand(program: Command, registry: ToolRegistry, store?: ConfigStore): void {
   const command = program.command("tools")
@@ -20,6 +115,7 @@ selected model as needed.
 
 Examples:
   cj tools register kubectl
+  cj tools list --page 2 --page-size 20
   cj tools registrations
   cj tools unregister kubectl
   cj tools refresh --force
@@ -107,12 +203,19 @@ Examples:
   command
     .command("list")
     .description("List built-in, enabled SDK and cached approved external tools")
-    .action(async () => {
+    .option("--page <number>", "Page number, starting at 1", "1")
+    .option("--page-size <number>", "Tools per page (1-100)", String(DEFAULT_TOOL_LIST_PAGE_SIZE))
+    .action(async (options: { page?: string; pageSize?: string }) => {
       await loadExtensions();
       await external();
-      for (const tool of registry.entries()) {
-        process.stdout.write(`${tool.definition.function.name}\t${tool.defaultRisk}\t${registry.origin(tool.definition.function.name) ?? "builtin"}\t${tool.definition.function.description}\n`);
-      }
+      const rows = registry.entries().map((tool) => ({
+        name: tool.definition.function.name,
+        risk: tool.defaultRisk,
+        source: registry.origin(tool.definition.function.name) ?? "builtin",
+        description: tool.definition.function.description
+      }));
+      const page = paginateToolRows(rows, options.page, options.pageSize);
+      process.stdout.write(`${formatToolListPage(page, toolsListWidth())}\n`);
     });
 
   command
