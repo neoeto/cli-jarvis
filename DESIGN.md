@@ -107,7 +107,7 @@ Human-readable assistant messages are rendered as terminal Markdown after the co
 - Ambiguous high-risk requests must be clarified rather than guessed.
 - `Ctrl+C` aborts the current task and prevents new Tool calls.
 - In a non-interactive terminal, any required confirmation fails closed.
-- When a task needs a material clarification, the model calls `ask_question`; the host renders it and returns the answer to the same task. Non-interactive use fails with `INTERACTION_REQUIRED`.
+- Every model turn contains one or more Tool calls. The model calls `finish_task` alone to end a task, and calls `ask_question` alone when it needs a material clarification; the host renders the latter and returns the answer to the same task. Non-interactive use fails with `INTERACTION_REQUIRED`.
 
 ## 3. System architecture
 
@@ -230,7 +230,7 @@ export interface ModelRequest {
   model: string;
   messages: AgentMessage[];
   tools: ModelToolDefinition[];
-  toolChoice: "auto" | "none";
+  toolChoice: "auto" | "none" | "required";
 }
 
 export type ModelResponse =
@@ -275,8 +275,8 @@ It is discarded when the process exits. The audit log is separate and is never r
 
 ```text
 1. Build system prompt, Tool definitions, and initial user message.
-2. Request the next model response.
-3. If it is a final message, render it and finish.
+2. Request the next model response with `tool_choice: required`.
+3. Reject ordinary text without a Tool call with `MODEL_RESPONSE_INVALID`.
 4. If it contains Tool calls:
    a. Process calls in response order.
    b. Resolve the Tool from the trusted registry.
@@ -285,14 +285,14 @@ It is discarded when the process exits. The audit log is separate and is never r
    e. Apply host policy and obtain confirmation when required.
    f. Execute the prepared action.
    g. Redact and append the Tool result.
-5. Repeat until completion or a limit is reached.
+5. On `finish_task`, render its `answer` and finish; otherwise repeat until a limit is reached.
 ```
 
 Multiple Tool calls returned in one model response are deliberately executed sequentially in the MVP. This produces deterministic prompts, confirmations, and audit order.
 
 ### 6.2 Limits
 
-- A configurable positive maximum number of executed Tool calls per task (default: 20).
+- A configurable positive maximum number of executed operational Tool calls per task (default: 20); the terminal `finish_task` call does not consume this quota.
 - Maximum wall time 5 minutes per task.
 - Provider and Tool calls receive a shared `AbortSignal`.
 - The runtime does not automatically increase either limit.
@@ -301,7 +301,7 @@ Multiple Tool calls returned in one model response are deliberately executed seq
 
 ### 6.3 Clarification
 
-The model asks a question only when a missing answer materially changes targets or side effects. It calls the low-risk `ask_question` Tool alone rather than ending ordinary text with a question. The host emits a first-class clarification event, presents up to eight single- or multi-select choices plus a free-text alternative, and returns the structured answer to the model as a Tool result. Answers are never written to audit history. In a non-interactive terminal this Tool emits its request event then fails closed with `INTERACTION_REQUIRED`.
+The model asks a question only when a missing answer materially changes targets or side effects. It calls the low-risk `ask_question` Tool alone rather than ending ordinary text with a question. It calls the low-risk `finish_task` Tool alone to deliver the final answer. The host requests `tool_choice: required`; ordinary text without a Tool call fails closed with `MODEL_RESPONSE_INVALID`, so prose questions cannot silently terminate tasks. The host emits a first-class clarification event, presents up to eight single- or multi-select choices plus a free-text alternative, and returns the structured answer to the model as a Tool result. Answers are never written to audit history. In a non-interactive terminal this Tool emits its request event then fails closed with `INTERACTION_REQUIRED`.
 
 ## 7. Tool contract
 

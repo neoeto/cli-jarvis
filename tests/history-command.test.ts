@@ -22,6 +22,14 @@ async function fixture(): Promise<{ store: AuditStore; sessionId: string }> {
     const task = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: `${index}` }), sessionId };
     await store.taskStarted(task);
     await store.agentEvent(task.taskId, { type: "task_title", title, generated: true });
+    await store.agentEvent(task.taskId, {
+      type: "model_usage",
+      requestId: `request-${index}`,
+      model: "fake",
+      purpose: "agent",
+      success: true,
+      usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 60, uncachedInputTokens: 40 }
+    });
     await store.taskFinished(task.taskId, true);
   }
   const standalone = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "standalone" });
@@ -65,5 +73,16 @@ describe("history command summaries", () => {
   it("rejects raw-event and grouped-summary options together", async () => {
     const { store } = await fixture();
     await expect(run(store, ["--events", "--tasks"])).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("shows Token usage only with --verbose", async () => {
+    const { store } = await fixture();
+    const normal = await run(store, []);
+    expect(normal).not.toContain("tokens:");
+
+    vi.restoreAllMocks();
+    const verbose = await run(store, ["--verbose"]);
+    expect(verbose).toContain("tokens:240");
+    expect(verbose).toContain("cache-hit:120");
   });
 });

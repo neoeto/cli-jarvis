@@ -7,6 +7,7 @@ import type { AgentEvent } from "../src/agent/events.js";
 import type { ModelProvider, ModelResponse } from "../src/providers/types.js";
 import type { PreparedAction, Tool, ToolContext, ToolResult } from "../src/tools/types.js";
 import { ToolRegistry } from "../src/tools/registry.js";
+import { FinishTaskTool } from "../src/tools/builtins/finish-task.js";
 
 const created: string[] = [];
 
@@ -35,7 +36,7 @@ class PreviewProvider implements ModelProvider {
     this.calls += 1;
     return this.calls === 1
       ? { kind: "tool_calls", calls: [{ id: "preview-call", name: "preview_test", arguments: "{}" }] }
-      : { kind: "message", content: "preview complete" };
+      : { kind: "tool_calls", calls: [{ id: "finish", name: "finish_task", arguments: '{"answer":"preview complete"}' }] };
   }
 }
 
@@ -45,7 +46,7 @@ describe("roadmap runtime controls", () => {
     created.push(workspace);
     const events: AgentEvent[] = [];
     const runtime = new AgentRuntime({
-      provider: new PreviewProvider(), model: "fake", registry: new ToolRegistry().register(previewTool), workspaceRoot: workspace,
+      provider: new PreviewProvider(), model: "fake", registry: new ToolRegistry().register(previewTool).register(new FinishTaskTool()), workspaceRoot: workspace,
       language: "en", maxToolCalls: 2, signal: new AbortController().signal, dryRun: true, taskId: "task-1", emitLifecycle: true,
       onEvent: (event) => events.push(event)
     });

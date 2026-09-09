@@ -65,7 +65,7 @@ Useful options:
 
 Human-readable assistant replies are rendered for the terminal: headings, emphasis, lists, task checkboxes, blockquotes, links, fenced code blocks, and GFM tables are formatted instead of showing Markdown markers literally. In a terminal, replies have a separate **回答 / Answer** heading and normal-brightness body. Status, decisions, and successful Tool activity are indented and dimmed on stderr; failures and confirmation requests remain prominent. Provider-supplied `reasoning_content` is shown separately only with `--verbose`. Plain/no-color output retains text labels, and redirected stdout contains only replies. JSONL mode keeps event payloads for automation, including separate `assistant_progress` and `reasoning` events.
 
-`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode. When a task needs a material clarification, the model can call the built-in `ask_question` Tool: both interactive `cj "..."` and `cj chat` pause for one question, offer single-select or multi-select options plus free text, then continue the same task with the answer. JSON, redirected, and piped invocations fail with `INTERACTION_REQUIRED` after emitting the question event; they never guess an answer. Human output waits for each model response to finish so text accompanying Tool calls can be classified as process information instead of an answer. JSONL mode continues to emit text deltas.
+`cj chat` requires an interactive TTY and rejects piped or redirected input immediately; `cj <prompt...>` remains the single-task/script-compatible mode. Every agent turn must contain a Tool call: the model calls `finish_task` alone to deliver its final answer, or `ask_question` alone when a material clarification is needed. This prevents a prose question from being mistaken for a completed task. Both interactive `cj "..."` and `cj chat` pause for one `ask_question`, offer single-select or multi-select options plus free text, then continue the same task with the answer. JSON, redirected, and piped invocations fail with `INTERACTION_REQUIRED` after emitting the question event; they never guess an answer. A provider that sends ordinary text without a Tool call fails closed with `MODEL_RESPONSE_INVALID`. Human output waits for each model response to finish so text accompanying Tool calls can be classified as process information instead of an answer. JSONL mode continues to emit text deltas.
 
 ## Built-in Tools
 
@@ -80,6 +80,7 @@ Human-readable assistant replies are rendered for the terminal: headings, emphas
 | `run_command` | Run an explicitly previewed process or shell command |
 | `git` | Structured status, diff, log, add, and commit operations |
 | `ask_question` | Pause one task for a material user clarification, with choices and free text |
+| `finish_task` | End a task and provide its complete final answer |
 | `search_web` | Search the public web through a configured Tavily account |
 
 `search_web` is disabled until configured. Run `cj config web-search configure` to save a Tavily key in the owner-only credential store or reference an environment variable (normally `TAVILY_API_KEY`). Each search sends its query and any domain filters to Tavily, displays that disclosure in the confirmation prompt, and requires explicit confirmation. The tool returns only result titles, snippets, and links; it does not fetch full pages, request images, or request a Tavily-generated answer. Tavily usage may consume API credits; see the [Tavily Search API documentation](https://docs.tavily.com/documentation/api-reference/endpoint/search).
@@ -143,6 +144,7 @@ The model is not the security boundary. Tool behavior, path checks, risk escalat
 
 ```bash
 cj history
+cj history --verbose
 cj history --tasks
 cj history --session 1234abcd
 cj history --events --limit 100
@@ -155,8 +157,8 @@ cj history prune --older-than 90
 ```
 
 History is local JSONL metadata. It stores a short, redacted task title and provider-reported Token usage, but does not retain raw prompts, assistant responses, file contents, environment values, or API Keys. Creating the title makes one additional model request per task; failures fall back to a redacted prompt excerpt and do not block the task.
-The default terminal view combines all turns of a chat session into one line while keeping standalone tasks separate. Use `--tasks` for every task/turn, `--session` for one chat's turns, or `--events` for the underlying event stream. JSONL remains event-level for automation compatibility.
-Token totals include title generation, agent requests, and any uncached external CLI review requests. The display breaks input into cache-hit and cache-miss tokens when the provider reports that detail, shows the cache hit rate, and reports reasoning tokens as a subset of output tokens. Input equals cache-hit plus cache-miss for DeepSeek; reasoning is already included in output and is never added to the total again. Missing provider usage or breakdown fields are reported as unknown or partial rather than zero, and SDK/provider retries that are not surfaced separately may not be measurable.
+The default terminal view combines all turns of a chat session into one line while keeping standalone tasks separate. Use `--verbose` to include Token usage statistics, `--tasks` for every task/turn, `--session` for one chat's turns, or `--events` for the underlying event stream. JSONL remains event-level for automation compatibility.
+With `--verbose`, Token totals include title generation, agent requests, and any uncached external CLI review requests. The display breaks input into cache-hit and cache-miss tokens when the provider reports that detail, shows the cache hit rate, and reports reasoning tokens as a subset of output tokens. Input equals cache-hit plus cache-miss for DeepSeek; reasoning is already included in output and is never added to the total again. Missing provider usage or breakdown fields are reported as unknown or partial rather than zero, and SDK/provider retries that are not surfaced separately may not be measurable.
 Exporting to a `.html` filename (or using `--format html`) creates a standalone, human-readable page with chat and task summaries, Token usage, and collapsible redacted event details.
 
 Long-term memory is off by default and separate from audit history. Only facts you explicitly add are stored; file contents, model output, command output, and credentials are never added automatically.

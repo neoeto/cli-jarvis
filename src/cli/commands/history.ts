@@ -14,7 +14,8 @@ export function addHistoryCommand(program: Command, audit: AuditStore): void {
     .option("--events", "show raw event records instead of one summary per task")
     .option("--tasks", "show each task/turn instead of grouping chat sessions")
     .option("--session <session-id>", "show task turns for one chat session by ID or prefix")
-    .action(async (options: { limit: string; events?: boolean; tasks?: boolean; session?: string }, command: Command) => {
+    .option("-v, --verbose", "show Token usage statistics in summary output")
+    .action(async (options: { limit: string; events?: boolean; tasks?: boolean; session?: string; verbose?: boolean }, command: Command) => {
       const limit = Number.parseInt(options.limit, 10);
       if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
         throw new CjError("CONFIG_INVALID", "limit must be between 1 and 1000");
@@ -44,8 +45,8 @@ export function addHistoryCommand(program: Command, audit: AuditStore): void {
         process.stdout.write("No history.\n");
         return;
       }
-      if (options.session || options.tasks) printSummaries((summaries as TaskHistorySummary[]).reverse());
-      else printHistorySummaries(summaries as HistorySummary[]);
+      if (options.session || options.tasks) printSummaries((summaries as TaskHistorySummary[]).reverse(), options.verbose === true);
+      else printHistorySummaries(summaries as HistorySummary[], options.verbose === true);
     });
 
   history
@@ -92,27 +93,27 @@ function formatDuration(durationMs: number | undefined): string {
   return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
-export function printSummaries(summaries: TaskHistorySummary[]): void {
+export function printSummaries(summaries: TaskHistorySummary[], verbose = false): void {
   for (const summary of summaries) {
     const session = summary.sessionId ? `  session:${summary.sessionId.slice(0, 8)}` : "";
     const error = summary.errorCode ? `  ${summary.errorCode}` : "";
     process.stdout.write(
-      `${summary.startedAt}  task:${summary.taskId.slice(0, 8)}${session}  ${summary.status}  ${formatUsage(summary)}  tools:${summary.toolCalls}  ${formatDuration(summary.durationMs)}  ${summary.title ?? "Legacy record, no description"}${error}\n`
+      `${summary.startedAt}  task:${summary.taskId.slice(0, 8)}${session}  ${summary.status}${verbose ? `  ${formatUsage(summary)}` : ""}  tools:${summary.toolCalls}  ${formatDuration(summary.durationMs)}  ${summary.title ?? "Legacy record, no description"}${error}\n`
     );
   }
 }
 
-export function printHistorySummaries(summaries: HistorySummary[]): void {
+export function printHistorySummaries(summaries: HistorySummary[], verbose = false): void {
   for (const summary of summaries) {
     const title = summary.title ?? "Legacy record, no description";
     if (summary.kind === "task") {
-      process.stdout.write(`${summary.lastActiveAt}  task:${summary.taskId.slice(0, 8)}  ${summary.status}  ${formatUsage(summary)}  tools:${summary.toolCalls}  ${title}\n`);
+      process.stdout.write(`${summary.lastActiveAt}  task:${summary.taskId.slice(0, 8)}  ${summary.status}${verbose ? `  ${formatUsage(summary)}` : ""}  tools:${summary.toolCalls}  ${title}\n`);
       continue;
     }
     const failures = summary.failedTurns || summary.cancelledTurns
       ? `  failed:${summary.failedTurns} cancelled:${summary.cancelledTurns}`
       : "";
-    process.stdout.write(`${summary.lastActiveAt}  chat:${summary.sessionId.slice(0, 8)}  ${summary.status}  turns:${summary.turns}${failures}  ${formatUsage(summary)}  tools:${summary.toolCalls}  ${title}\n`);
+    process.stdout.write(`${summary.lastActiveAt}  chat:${summary.sessionId.slice(0, 8)}  ${summary.status}  turns:${summary.turns}${failures}${verbose ? `  ${formatUsage(summary)}` : ""}  tools:${summary.toolCalls}  ${title}\n`);
   }
 }
 

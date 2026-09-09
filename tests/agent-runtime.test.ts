@@ -8,9 +8,15 @@ import type { AgentEvent } from "../src/agent/events.js";
 import type { AgentMessage, ModelProvider, ModelRequest, ModelResponse } from "../src/providers/types.js";
 import { ListFilesTool } from "../src/tools/builtins/list-files.js";
 import { AskQuestionTool } from "../src/tools/builtins/ask-question.js";
+import { FinishTaskTool } from "../src/tools/builtins/finish-task.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { PreparedAction, Tool, ToolContext, ToolResult } from "../src/tools/types.js";
 import type { ConfirmationHandler } from "../src/policy/engine.js";
+
+const finish = (answer: string): ModelResponse => ({
+  kind: "tool_calls",
+  calls: [{ id: "finish", name: "finish_task", arguments: JSON.stringify({ answer }) }]
+});
 
 class FakeProvider implements ModelProvider {
   readonly id = "fake";
@@ -25,7 +31,7 @@ class FakeProvider implements ModelProvider {
         calls: [{ id: "call-1", name: "list_files", arguments: '{"path":".","recursive":false}' }]
       };
     }
-    return { kind: "message", content: "目录中有一个文件：hello.txt" };
+    return finish("目录中有一个文件：hello.txt");
   }
 }
 
@@ -36,6 +42,54 @@ afterEach(async () => {
 });
 
 describe("AgentRuntime", () => {
+  it("fails closed when a model asks or answers in ordinary text", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-text-protocol-"));
+    created.push(root);
+    let toolChoice: ModelRequest["toolChoice"] | undefined;
+    const provider: ModelProvider = {
+      id: "fake",
+      async complete(request) {
+        toolChoice = request.toolChoice;
+        return { kind: "message", content: "请问您想了解哪一种？" };
+      }
+    };
+    const runtime = new AgentRuntime({
+      provider, model: "fake", registry: new ToolRegistry().register(new FinishTaskTool()),
+      workspaceRoot: root, language: "zh-CN", maxToolCalls: 20, signal: new AbortController().signal
+    });
+
+    await expect(runtime.run("查询资料")).rejects.toMatchObject({ code: "MODEL_RESPONSE_INVALID" });
+    expect(toolChoice).toBe("required");
+  });
+
+  it("requires finish_task to be the only Tool call in its response", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-finish-protocol-"));
+    created.push(root);
+    let calls = 0;
+    const provider: ModelProvider = {
+      id: "fake",
+      async complete() {
+        calls += 1;
+        return calls === 1
+          ? {
+              kind: "tool_calls",
+              calls: [
+                { id: "finish", name: "finish_task", arguments: '{"answer":"ignore this"}' },
+                { id: "list", name: "list_files", arguments: '{"path":"."}' }
+              ]
+            }
+          : finish("Done.");
+      }
+    };
+    const runtime = new AgentRuntime({
+      provider, model: "fake", registry: new ToolRegistry().register(new FinishTaskTool()).register(new ListFilesTool()),
+      workspaceRoot: root, language: "en", maxToolCalls: 20, signal: new AbortController().signal
+    });
+
+    await expect(runtime.run("do work")).resolves.toBe("Done.");
+    expect(calls).toBe(2);
+  });
+
   it("classifies tool-call commentary and reasoning separately from the final answer", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-output-"));
     created.push(root);
@@ -53,12 +107,12 @@ describe("AgentRuntime", () => {
           };
         }
         await request.onTextDelta?.("目录为空。");
-        return { kind: "message", content: "目录为空。", streamed: true };
+        return finish("目录为空。");
       }
     };
     const events: AgentEvent[] = [];
     const runtime = new AgentRuntime({
-      provider, model: "fake", registry: new ToolRegistry().register(new ListFilesTool()),
+      provider, model: "fake", registry: new ToolRegistry().register(new ListFilesTool()).register(new FinishTaskTool()),
       workspaceRoot: root, language: "zh-CN", maxToolCalls: 20,
       signal: new AbortController().signal, onEvent: (event) => events.push(event)
     });
@@ -66,7 +120,7 @@ describe("AgentRuntime", () => {
     expect(events.filter((event) => ["reasoning", "assistant_progress", "assistant"].includes(event.type))).toEqual([
       { type: "reasoning", content: "需要检查目录。" },
       { type: "assistant_progress", content: "先列出文件。\n\n" },
-      { type: "assistant", content: "目录为空。", streamed: true }
+      { type: "assistant", content: "目录为空。" }
     ]);
   });
 
@@ -79,7 +133,7 @@ describe("AgentRuntime", () => {
     const runtime = new AgentRuntime({
       provider,
       model: "fake-model",
-      registry: new ToolRegistry().register(new ListFilesTool()),
+      registry: new ToolRegistry().register(new ListFilesTool()).register(new FinishTaskTool()),
       workspaceRoot: root,
       language: "zh-CN",
       maxToolCalls: 20,
@@ -96,7 +150,7 @@ describe("AgentRuntime", () => {
       "status",
       "tool_start",
       "tool_result",
-      "assistant"
+      "tool_start", "tool_result", "assistant"
     ]);
   });
 
@@ -109,7 +163,7 @@ describe("AgentRuntime", () => {
     const base = {
       provider,
       model: "fake-model",
-      registry: new ToolRegistry().register(new ListFilesTool()),
+      registry: new ToolRegistry().register(new ListFilesTool()).register(new FinishTaskTool()),
       workspaceRoot: root,
       language: "zh-CN" as const,
       maxToolCalls: 20,
@@ -154,7 +208,7 @@ describe("AgentRuntime", () => {
                 })
               }]
             }
-          : { kind: "message", content: "I will use Markdown." };
+          : finish("I will use Markdown.");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
@@ -165,7 +219,7 @@ describe("AgentRuntime", () => {
     const runtime = new AgentRuntime({
       provider,
       model: "fake-model",
-      registry: new ToolRegistry().register(new AskQuestionTool()),
+      registry: new ToolRegistry().register(new AskQuestionTool()).register(new FinishTaskTool()),
       workspaceRoot: root,
       language: "en",
       maxToolCalls: 20,
@@ -206,7 +260,7 @@ describe("AgentRuntime", () => {
         if (this.calls === 2) {
           return { kind: "tool_calls", calls: [{ id: "question-2", name: "ask_question", arguments: '{"question":"Choose one"}' }] };
         }
-        return { kind: "message", content: "Done." };
+        return finish("Done.");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
@@ -215,7 +269,7 @@ describe("AgentRuntime", () => {
     const runtime = new AgentRuntime({
       provider,
       model: "fake-model",
-      registry: new ToolRegistry().register(new AskQuestionTool()).register(new ListFilesTool()),
+      registry: new ToolRegistry().register(new AskQuestionTool()).register(new FinishTaskTool()).register(new ListFilesTool()),
       workspaceRoot: root,
       language: "en",
       maxToolCalls: 20,
@@ -228,7 +282,7 @@ describe("AgentRuntime", () => {
     expect(provider.calls).toBe(3);
     const correctionRequest = provider.requests[1];
     expect(correctionRequest?.messages.filter((message) => message.role === "tool")).toHaveLength(2);
-    expect(JSON.stringify(correctionRequest)).toContain("ask_question must be the only Tool call");
+    expect(JSON.stringify(correctionRequest)).toContain("ask_question and finish_task must each be the only Tool call");
   });
 
   it("fails closed after emitting a clarification event without an interactive terminal", async () => {
@@ -242,7 +296,7 @@ describe("AgentRuntime", () => {
     created.push(root);
     const events: AgentEvent[] = [];
     const runtime = new AgentRuntime({
-      provider: new QuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()),
+      provider: new QuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()).register(new FinishTaskTool()),
       workspaceRoot: root, language: "en", maxToolCalls: 20, interactive: false,
       signal: new AbortController().signal, onEvent: (event) => events.push(event)
     });
@@ -260,14 +314,14 @@ describe("AgentRuntime", () => {
         this.calls += 1;
         return this.calls === 1
           ? { kind: "tool_calls", calls: [{ id: "question", name: "ask_question", arguments: '{"question":"Continue?"}' }] }
-          : { kind: "message", content: "Preview complete." };
+          : finish("Preview complete.");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
     created.push(root);
     const events: AgentEvent[] = [];
     const runtime = new AgentRuntime({
-      provider: new DryQuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()),
+      provider: new DryQuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()).register(new FinishTaskTool()),
       workspaceRoot: root, language: "en", maxToolCalls: 20, interactive: true, dryRun: true,
       askQuestion: async () => { throw new Error("Question UI must not open in dry-run"); },
       signal: new AbortController().signal, onEvent: (event) => events.push(event)
@@ -286,13 +340,13 @@ describe("AgentRuntime", () => {
         this.calls += 1;
         return this.calls === 1
           ? { kind: "tool_calls", calls: [{ id: "question", name: "ask_question", arguments: '{"question":"Continue?"}' }] }
-          : { kind: "message", content: "Continued." };
+          : finish("Continued.");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
     created.push(root);
     const runtime = new AgentRuntime({
-      provider: new SlowQuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()),
+      provider: new SlowQuestionProvider(), model: "fake-model", registry: new ToolRegistry().register(new AskQuestionTool()).register(new FinishTaskTool()),
       workspaceRoot: root, language: "en", maxToolCalls: 20, interactive: true, toolTimeoutMs: 1,
       askQuestion: async () => {
         await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -312,7 +366,7 @@ describe("AgentRuntime", () => {
         this.calls += 1;
         return this.calls === 1
           ? { kind: "tool_calls", calls: [{ id: "bad", name: "list_files", arguments: "not json" }] }
-          : { kind: "message", content: "无法执行：参数无效" };
+          : finish("无法执行：参数无效");
       }
     }
 
@@ -321,7 +375,7 @@ describe("AgentRuntime", () => {
     const runtime = new AgentRuntime({
       provider: new InvalidProvider(),
       model: "fake-model",
-      registry: new ToolRegistry().register(new ListFilesTool()),
+      registry: new ToolRegistry().register(new ListFilesTool()).register(new FinishTaskTool()),
       workspaceRoot: root,
       language: "zh-CN",
       maxToolCalls: 20,
@@ -348,7 +402,7 @@ describe("AgentRuntime", () => {
                 arguments: JSON.stringify({ path: file })
               }))
             }
-          : { kind: "message", content: "Those are files; I should use read_file for their contents." };
+          : finish("Those are files; I should use read_file for their contents.");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
@@ -356,7 +410,7 @@ describe("AgentRuntime", () => {
     await Promise.all(["one.txt", "two.txt", "three.txt"].map((file) => writeFile(path.join(root, file), "test")));
     const provider = new MultipleInvalidProvider();
     const runtime = new AgentRuntime({
-      provider, model: "fake-model", registry: new ToolRegistry().register(new ListFilesTool()), workspaceRoot: root,
+      provider, model: "fake-model", registry: new ToolRegistry().register(new ListFilesTool()).register(new FinishTaskTool()), workspaceRoot: root,
       language: "en", maxToolCalls: 20, signal: new AbortController().signal
     });
     await expect(runtime.run("inspect files")).resolves.toContain("read_file");
@@ -376,7 +430,7 @@ describe("AgentRuntime", () => {
         this.lastRequest = structuredClone(serializableRequest);
         return this.calls === 1
           ? { kind: "tool_calls", calls: [{ id: "unknown", name: "delete_everything", arguments: "{}" }] }
-          : { kind: "message", content: "该工具不可用" };
+          : finish("该工具不可用");
       }
     }
 
@@ -386,7 +440,7 @@ describe("AgentRuntime", () => {
     const runtime = new AgentRuntime({
       provider,
       model: "fake-model",
-      registry: new ToolRegistry().register(new ListFilesTool()),
+      registry: new ToolRegistry().register(new ListFilesTool()).register(new FinishTaskTool()),
       workspaceRoot: root,
       language: "zh-CN",
       maxToolCalls: 20,
@@ -438,7 +492,7 @@ describe("AgentRuntime", () => {
         this.calls += 1;
         return this.calls === 1
           ? { kind: "tool_calls", calls: [{ id: "high", name: "high_risk_test", arguments: "{}" }] }
-          : { kind: "message", content: "完成" };
+          : finish("完成");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
@@ -447,7 +501,7 @@ describe("AgentRuntime", () => {
     const runtime = new AgentRuntime({
       provider: new HighRiskProvider(),
       model: "fake-model",
-      registry: new ToolRegistry().register(highRiskTool),
+      registry: new ToolRegistry().register(highRiskTool).register(new FinishTaskTool()),
       workspaceRoot: root,
       language: "zh-CN",
       maxToolCalls: 20,
@@ -493,7 +547,7 @@ describe("AgentRuntime", () => {
             { id: "batch-1", name: "batch_risk_test", arguments: "{}" },
             { id: "batch-2", name: "batch_risk_test", arguments: "{}" }
           ] }
-          : { kind: "message", content: "done" };
+          : finish("done");
       }
     }
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-agent-test-"));
@@ -507,7 +561,7 @@ describe("AgentRuntime", () => {
     });
     const events: AgentEvent[] = [];
     const runtime = new AgentRuntime({
-      provider: new BatchProvider(), model: "fake", registry: new ToolRegistry().register(highRiskTool), workspaceRoot: root,
+      provider: new BatchProvider(), model: "fake", registry: new ToolRegistry().register(highRiskTool).register(new FinishTaskTool()), workspaceRoot: root,
       language: "en", maxToolCalls: 2, signal: new AbortController().signal, interactive: true, confirm: confirmation,
       onEvent: (event) => events.push(event)
     });

@@ -94,8 +94,10 @@ export class AgentRuntime {
   private readonly messages: AgentMessage[];
 
   constructor(private readonly options: AgentRuntimeOptions) {
+    // `cj chat` 会把已成功轮次的 transcript 传入；单次任务则从空上下文开始。
     this.messages = options.messages ?? [];
     if (this.messages.length === 0) {
+      // system prompt 必须处于上下文前缀，后续各轮只追加消息，便于模型侧复用 KV-cache。
       this.messages.push({
         role: "system",
         content: createSystemPrompt(options.workspaceRoot, options.language, options.skillCatalog?.skills)
@@ -120,7 +122,9 @@ export class AgentRuntime {
     const emit: EventSink = this.options.onEvent ?? (() => undefined);
     const policy = this.options.policy ?? new PolicyEngine();
     const messages = this.messages;
+    // 用户输入是本轮新增上下文；Tool 调用及其结果会继续追加到同一数组。
     messages.push({ role: "user", content: prompt });
+    // 这两个计数分别限制真实操作次数和连续无效的模型输出，防止 agent loop 无限循环。
     let executedCalls = 0;
     let invalidRounds = 0;
     let outputBytes = 0;
@@ -142,6 +146,7 @@ export class AgentRuntime {
       }
     };
     const askQuestion = async (request: QuestionRequest, questionSignal: AbortSignal) => {
+      // ask_question 的交互由宿主接管，模型只能在下一轮通过 Tool result 看到用户答案。
       await lifecycle("waiting_question", "ask_question");
       await emit({ type: "question_requested", request });
       if (!this.options.interactive || !this.options.askQuestion) {
@@ -178,17 +183,22 @@ export class AgentRuntime {
       await emit({ type: "memory_used", ids: this.options.memoryFacts.map((fact) => fact.id), purpose: "personalize the current task" });
     }
 
+    // Agent loop：模型规划 -> 宿主校验/执行工具 -> 将结果回灌给模型，直到 finish_task。
     while (true) {
       if (signal.aborted) {
         await lifecycle("cancelled");
         throw new CjError("ABORTED", "Task aborted");
       }
+      // 每次都发送完整 transcript 与当前 Tool 定义；历史消息保持追加顺序，不在循环中重写。
       const response = await bounded((requestSignal) => provider.complete(
         {
           model,
           messages,
           tools: registry.definitions(),
-          toolChoice: "auto",
+          // A final answer is represented by finish_task, so a conforming
+          // provider must return a Tool call on every model turn. This avoids
+          // silently treating a prose clarification as task completion.
+          toolChoice: "required",
           onTextDelta: async (content) => {
             outputBytes += Buffer.byteLength(content);
             if (this.options.maxOutputBytes && outputBytes > this.options.maxOutputBytes) {
@@ -202,21 +212,19 @@ export class AgentRuntime {
 
       if (response.reasoning) await emit({ type: "reasoning", content: response.reasoning });
       if (response.kind === "message") {
-        messages.push({ role: "assistant", content: response.content });
-        await emit({
-          type: "assistant",
-          content: response.content,
-          ...(response.streamed === undefined ? {} : { streamed: response.streamed })
-        });
-        await lifecycle("completed");
-        return response.content;
+        // 协议要求模型显式调用 finish_task 或 ask_question，避免自然语言追问被误判为任务完成。
+        throw new CjError(
+          "MODEL_RESPONSE_INVALID",
+          "Model returned ordinary text without the required Tool call; use finish_task for a final answer or ask_question for a clarification"
+        );
       }
 
       if (response.content) await emit({ type: "assistant_progress", content: response.content });
 
-      const questionCalls = response.calls.filter((call) => call.name === "ask_question");
-      if (questionCalls.length > 0 && response.calls.length !== 1) {
-        const reason = "ask_question must be the only Tool call in a model response";
+      const terminalCalls = response.calls.filter((call) => call.name === "ask_question" || call.name === "finish_task");
+      if (terminalCalls.length > 0 && response.calls.length !== 1) {
+        // 终止和澄清不能与副作用工具混在同一批，保证交互边界清晰且可恢复。
+        const reason = "ask_question and finish_task must each be the only Tool call in a model response";
         messages.push({
           role: "assistant",
           content: response.content ?? null,
@@ -236,6 +244,7 @@ export class AgentRuntime {
         continue;
       }
 
+      // 先记录模型声明的 Tool call，随后无论执行成功或失败都追加配对的 Tool result。
       messages.push({
         role: "assistant",
         content: response.content ?? null,
@@ -250,6 +259,7 @@ export class AgentRuntime {
       // response. Preparation has no side effects by contract, so we can show
       // a single batch summary while authorizing each prepared action locally.
       if (response.calls.length > 1) {
+        // prepare 按契约无副作用：可先收集多项高风险操作，再一次性向用户确认。
         const confirmations: PolicyDecision[] = [];
         for (const [callIndex, call] of response.calls.entries()) {
           try {
@@ -282,18 +292,20 @@ export class AgentRuntime {
         }
       }
 
+      // 按模型返回顺序串行执行；全部结果会在下一次模型请求中作为上下文回灌。
       for (const [callIndex, call] of response.calls.entries()) {
         const stepId = call.id || `call-${callIndex}`;
         const dependencies = previousStepId ? [previousStepId] : [];
         previousStepId = stepId;
         await step(stepId, call.name, "queued", dependencies);
         const callStartedAt = performance.now();
-        if (executedCalls >= maxToolCalls) {
+        if (call.name !== "finish_task" && executedCalls >= maxToolCalls) {
           await step(stepId, call.name, "failed", dependencies, "Tool call limit exceeded");
           throw new CjError("LIMIT_EXCEEDED", `Maximum Tool call count (${maxToolCalls}) exceeded`);
         }
         let result: ToolResult;
         try {
+          // parse + prepare 将不可信参数转换为可审计、可授权且会过期的 PreparedAction。
           const preflight = preparedCalls.get(call.id || `call-${callIndex}`);
           const tool = preflight?.tool ?? registry.get(call.name);
           const action = preflight?.action ?? await tool.prepare(
@@ -306,7 +318,8 @@ export class AgentRuntime {
           }
           const decision = preflight?.decision ?? policy.evaluate(action);
           responseHadValidCall = true;
-          if (this.options.dryRun) {
+          if (this.options.dryRun && call.name !== "finish_task") {
+            // 预览模式只把“将执行什么”回传模型，绝不调用工具的 execute。
             await emit({ type: "tool_preview", name: call.name, summary: action.summary, riskLevel: decision.effectiveRisk });
             result = {
               success: true,
@@ -328,6 +341,7 @@ export class AgentRuntime {
           }
           await emit({ type: "tool_start", name: call.name, summary: action.summary, riskLevel: decision.effectiveRisk });
           if (decision.confirmation) {
+            // 高风险操作必须在 execute 前获得宿主侧确认，模型文本本身不构成授权。
             if (!batchApprovedActionIds.has(decision.confirmation.actionId)) {
               await lifecycle("waiting_confirmation", call.name);
               await emit({ type: "confirmation_requested", request: decision.confirmation });
@@ -352,6 +366,7 @@ export class AgentRuntime {
               }
             }
           }
+          // 确认等待期间目标可能变化，因此执行前重新检查 action 的有效期和策略。
           if (new Date(action.expiresAt).getTime() <= Date.now()) {
             throw new CjError("TOOL_FAILED", `Prepared action expired after confirmation: ${action.id}`);
           }
@@ -367,8 +382,10 @@ export class AgentRuntime {
             call.name === "ask_question" ? undefined : this.options.toolTimeoutMs,
             `Tool ${call.name}`
           );
-          executedCalls += 1;
-          this.options.onToolExecuted?.();
+          if (call.name !== "finish_task") {
+            executedCalls += 1;
+            this.options.onToolExecuted?.();
+          }
           await emit({
             type: "tool_result",
             name: call.name,
@@ -407,13 +424,24 @@ export class AgentRuntime {
           await step(stepId, call.name, "failed", dependencies, normalized.message);
         }
 
+        // 无论工具成功还是失败，结构化结果都回灌给模型，以便它在下一轮修正计划。
         messages.push({ role: "tool", toolCallId: call.id || randomUUID(), content: serializableResult(result) });
+        if (call.name === "finish_task" && result.success) {
+          // finish_task 是唯一正常退出分支；其 answer 同时写入 transcript 并作为最终用户回复渲染。
+          const answer = result.data && typeof result.data === "object" && "answer" in result.data && typeof result.data.answer === "string"
+            ? result.data.answer
+            : undefined;
+          if (!answer) {
+            throw new CjError("MODEL_RESPONSE_INVALID", "finish_task returned no final answer");
+          }
+          messages.push({ role: "assistant", content: answer });
+          await emit({ type: "assistant", content: answer });
+          await lifecycle("completed");
+          return answer;
+        }
       }
-      // Several malformed calls can arrive in a single streamed model turn.
-      // Return every structured error before counting the turn, so the model
-      // gets a genuine chance to choose the correct Tool. We still bound three
-      // consecutive wholly-invalid turns to prevent an infinite correction
-      // loop; a valid Tool call resets the counter.
+      // 多个畸形调用可能出现在同一次流式响应中；先完整回传错误，再计算连续失败轮数。
+      // 这样模型有机会选择正确工具；连续三轮全无效时才中止，任一有效调用会重置计数。
       if (responseHadInvalidCall && !responseHadValidCall) invalidRounds += 1;
       else invalidRounds = 0;
       if (invalidRounds >= 3) {
