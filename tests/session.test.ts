@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { createReadlineSessionInput, type SessionInput } from "../src/cli/session/input.js";
+import { createReadlineSessionInput, renderBackspaceErase, type SessionInput } from "../src/cli/session/input.js";
 import { parseSessionInput } from "../src/cli/session/commands.js";
 import { runInteractiveSession } from "../src/cli/session/repl.js";
 import { CjError } from "../src/shared/errors.js";
@@ -117,6 +117,26 @@ describe("chat session", () => {
     expect(writes).toContain("\nCancelling the current task…");
     expect(writes).toContain("Session closed.");
   });
+
+  it("reports an unexpected closed input instead of silently exiting", async () => {
+    const input = new ScriptedInput([undefined]);
+    const writes: string[] = [];
+
+    await runInteractiveSession({
+      input,
+      language: "en",
+      runPrompt: async () => undefined,
+      clear: () => undefined,
+      status: () => noopStatus,
+      tools: () => "Available Tools",
+      history: async () => "No history.",
+      last: async () => "No history.",
+      write: (message) => writes.push(message),
+      reportError: (error) => writes.push(error.message)
+    });
+
+    expect(writes).toContain("Standard input closed (EOF); session ended.");
+  });
 });
 
 describe("readline session input", () => {
@@ -138,6 +158,43 @@ describe("readline session input", () => {
     input.end("first line\nsecond line\n\n");
 
     await expect(answer).resolves.toBe("first line\nsecond line\n");
+    sessionInput.close();
+  });
+
+  it("pauses chat input after submission until the next turn", async () => {
+    input = new PassThrough();
+    output = new PassThrough();
+    const sessionInput = createReadlineSessionInput(input, output);
+
+    const first = sessionInput.next("cj> ");
+    input.write("first turn\n");
+    await expect(first).resolves.toBe("first turn");
+    expect(input.isPaused()).toBe(true);
+
+    const second = sessionInput.next("cj> ");
+    expect(input.isPaused()).toBe(false);
+    input.end("second turn\n");
+    await expect(second).resolves.toBe("second turn");
+    sessionInput.close();
+  });
+
+  it("erases CJK double-width characters across their full display width", () => {
+    expect(renderBackspaceErase(1)).toBe("\b \b");
+    expect(renderBackspaceErase(2)).toBe("\b\b  \b\b");
+  });
+
+  it("accepts Node's Buffer writes while rendering a terminal prompt", async () => {
+    input = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode: (enabled: boolean) => void };
+    input.isTTY = true;
+    input.setRawMode = () => undefined;
+    output = new PassThrough() as PassThrough & { isTTY: boolean; columns: number };
+    output.isTTY = true;
+    output.columns = 80;
+    const sessionInput = createReadlineSessionInput(input, output);
+
+    const answer = sessionInput.next("cj> ");
+    input.end();
+    await expect(answer).resolves.toBeUndefined();
     sessionInput.close();
   });
 });

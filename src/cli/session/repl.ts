@@ -117,7 +117,17 @@ export async function runInteractiveSession(options: SessionHandlers): Promise<v
   try {
     while (!exiting) {
       const raw = await input.next(prompt);
-      if (raw === undefined) break;
+      if (raw === undefined) {
+        // /exit and Ctrl+C set exiting themselves. Any other undefined value
+        // is an actual closed stdin/EOF, which should not look like a silent
+        // application exit.
+        if (!exiting) {
+          write(language === "zh-CN"
+            ? "检测到标准输入已关闭（EOF），会话结束。"
+            : "Standard input closed (EOF); session ended.");
+        }
+        break;
+      }
       const command = parseSessionInput(raw);
       switch (command.kind) {
         case "empty":
