@@ -81,7 +81,10 @@ Human-readable assistant replies are rendered for the terminal: headings, emphas
 | `git` | Structured status, diff, log, add, and commit operations |
 | `ask_question` | Pause one task for a material user clarification, with choices and free text |
 | `finish_task` | End a task and provide its complete final answer |
+| `get_current_time` | Read the current date and time from the host system clock, optionally in an IANA time zone |
 | `search_web` | Search the public web through a configured Tavily account |
+
+`get_current_time` is local, low-risk, and requires no configuration or network access. It defaults to the host's local IANA time zone; pass a value such as `Asia/Shanghai` to request another supported zone. Results include a local ISO date-time with UTC offset, UTC ISO time, date, time, and Unix timestamps.
 
 `search_web` is disabled until configured. Run `cj config web-search configure` to save a Tavily key in the owner-only credential store or reference an environment variable (normally `TAVILY_API_KEY`). Each search sends its query and any domain filters to Tavily, displays that disclosure in the confirmation prompt, and requires explicit confirmation. The tool returns only result titles, snippets, and links; it does not fetch full pages, request images, or request a Tavily-generated answer. Tavily usage may consume API credits; see the [Tavily Search API documentation](https://docs.tavily.com/documentation/api-reference/endpoint/search).
 

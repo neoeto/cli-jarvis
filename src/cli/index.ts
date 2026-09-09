@@ -42,6 +42,7 @@ import { ReadSkillTool } from "../tools/builtins/read-skill.js";
 import { AskQuestionTool } from "../tools/builtins/ask-question.js";
 import { FinishTaskTool } from "../tools/builtins/finish-task.js";
 import { SearchWebTool } from "../tools/builtins/search-web.js";
+import { GetCurrentTimeTool } from "../tools/builtins/get-current-time.js";
 import { createTerminalQuestion } from "./question.js";
 import path from "node:path";
 import { createTaskTitle } from "../agent/title.js";
@@ -62,6 +63,7 @@ const registry = new ToolRegistry()
   .register(new GitTool())
   .register(new AskQuestionTool())
   .register(new FinishTaskTool())
+  .register(new GetCurrentTimeTool())
   .register(new SearchWebTool());
 
 interface CliOptions {

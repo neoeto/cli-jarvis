@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added the low-risk `get_current_time` built-in Tool, which reads the host system clock and supports optional IANA time-zone formatting.
+
 ## 1.0.0
 
 - Replaced external CLI directory scanning with explicit PATH command registrations, immediate documentation review, PATH-change invalidation, and TUI management.

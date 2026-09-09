@@ -388,6 +388,7 @@ The Tool determines the operation semantics. For example, `trash_files` promises
 | `trash_files` | Move files to operating-system trash | Tool-declared preview required |
 | `run_command` | Start a program with structured arguments or explicit shell mode | Always high |
 | `git` | Inspect or mutate Git state through explicit operations | Operation-specific |
+| `get_current_time` | Read the host system clock in its local or a requested IANA time zone | Low |
 | `search_web` | Query a configured Tavily web-search account; returns bounded titles, snippets, and links | High; confirm every query |
 
 Tool names and schemas remain English-only. User-facing summaries are localized.
