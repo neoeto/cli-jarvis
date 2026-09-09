@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/config/schema.js";
-import { createDeepSeekProvider } from "../src/providers/deepseek.js";
+import { createDeepSeekProvider, createProvider } from "../src/providers/deepseek.js";
 
 const servers: Server[] = [];
 
@@ -118,6 +118,112 @@ describe("DeepSeek provider", () => {
       }
     });
     expect(usageSnapshots).toEqual([2, 18]);
+  });
+
+  it("supports an unauthenticated local provider without reading OPENAI_API_KEY", async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "must-not-be-forwarded";
+    let authorization: string | undefined;
+    let requestBody: Record<string, unknown> | undefined;
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      authorization = request.headers.authorization;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-local",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "local-model",
+          choices: [{ index: 0, finish_reason: "stop", delta: { role: "assistant", content: "local response" } }]
+        })}\n\ndata: [DONE]\n\n`
+      );
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+
+    try {
+      const config = {
+        ...defaultConfig,
+        provider: {
+          ...defaultConfig.provider,
+          id: "ollama",
+          baseURL: `http://127.0.0.1:${address.port}/v1`,
+          model: "local-model",
+          kind: "local" as const,
+          thinking: true
+        }
+      };
+      const result = await createProvider(config).complete(
+        {
+          model: config.provider.model,
+          messages: [{ role: "user", content: "hello" }],
+          tools: [],
+          toolChoice: "none"
+        },
+        new AbortController().signal
+      );
+
+      expect(authorization).toBeUndefined();
+      expect(requestBody).toMatchObject({ model: "local-model", stream: true });
+      expect(requestBody).not.toHaveProperty("thinking");
+      expect(result).toMatchObject({ kind: "message", content: "local response", streamed: false });
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
+  });
+
+  it("sends an optional credential to a local provider when configured", async () => {
+    let authorization: string | undefined;
+    const server = createServer(async (request, response) => {
+      for await (const _chunk of request) {
+        // Drain the request before responding.
+      }
+      authorization = request.headers.authorization;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-local-auth",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "local-model",
+          choices: [{ index: 0, finish_reason: "stop", delta: { role: "assistant", content: "ok" } }]
+        })}\n\ndata: [DONE]\n\n`
+      );
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+
+    const config = {
+      ...defaultConfig,
+      provider: {
+        ...defaultConfig.provider,
+        id: "ollama",
+        baseURL: `http://127.0.0.1:${address.port}/v1`,
+        model: "local-model",
+        kind: "local" as const
+      }
+    };
+    await createProvider(config, "local-secret").complete(
+      {
+        model: config.provider.model,
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+        toolChoice: "none"
+      },
+      new AbortController().signal
+    );
+
+    expect(authorization).toBe("Bearer local-secret");
   });
 
   it.each([undefined, "Consider the request first."])("keeps reasoning %s separate from streamed answer text", async (reasoning) => {

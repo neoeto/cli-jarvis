@@ -10,7 +10,7 @@ import type {
 
 export interface OpenAICompatibleOptions {
   id: string;
-  apiKey: string;
+  apiKey?: string;
   baseURL: string;
   extraBody?: Record<string, unknown>;
 }
@@ -73,7 +73,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   constructor(options: OpenAICompatibleOptions) {
     this.id = options.id;
-    this.client = new OpenAI({ apiKey: options.apiKey, baseURL: options.baseURL });
+    // The OpenAI SDK requires a key even for unauthenticated compatible
+    // servers. Use a fixed internal placeholder and explicitly remove the
+    // SDK-generated Authorization header so OPENAI_API_KEY cannot leak into a
+    // local request through the SDK's environment fallback.
+    this.client = new OpenAI({
+      apiKey: options.apiKey ?? "__cj_local_no_auth__",
+      baseURL: options.baseURL,
+      ...(options.apiKey === undefined ? { defaultHeaders: { Authorization: null } } : {})
+    });
     this.extraBody = options.extraBody ?? {};
   }
 

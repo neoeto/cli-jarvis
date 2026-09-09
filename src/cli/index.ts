@@ -80,7 +80,7 @@ interface CliOptions {
 
 interface ExecuteTaskOptions {
   config: AppConfig;
-  apiKey: string;
+  apiKey?: string;
   prompt: string;
   workspaceRoot: string;
   language: "zh-CN" | "en";
@@ -355,7 +355,7 @@ Use cj <command> --help for command-specific usage.
       throw new CjError("CONFIG_INVALID", `Unsupported language: ${language}`);
     }
     const requestedTimeout = resolveTimeout(config, options.timeout);
-    const apiKey = await store.resolveApiKey(config.provider.id);
+    const apiKey = await store.resolveProviderCredential(config.provider);
     const workspaceRoot = await realpath(process.cwd());
     const prompt = words.join(" ");
     const controller = new AbortController();
@@ -365,7 +365,7 @@ Use cj <command> --help for command-specific usage.
     try {
       await executeTaskWithController({
         config,
-        apiKey,
+        ...(apiKey === undefined ? {} : { apiKey }),
         prompt,
         workspaceRoot,
         language,
@@ -401,7 +401,7 @@ program
       throw new CjError("CONFIG_INVALID", `Unsupported language: ${language}`);
     }
     const timeoutMs = resolveTimeout(config, options.timeout);
-    const apiKey = await store.resolveApiKey(config.provider.id);
+    const apiKey = await store.resolveProviderCredential(config.provider);
     const workspaceRoot = await realpath(process.cwd());
     const transcript: AgentMessage[] = [];
     const startedAt = new Date().toISOString();
@@ -459,7 +459,7 @@ program
         try {
           await executeTaskWithController({
             config,
-            apiKey,
+            ...(apiKey === undefined ? {} : { apiKey }),
             prompt,
             workspaceRoot,
             language,
@@ -547,10 +547,14 @@ program
   .option("--offline", "skip the provider connectivity check")
   .option("--profile <name>", "profile to check")
   .action(async (options: { offline?: boolean; profile?: string }) => {
-    const config = selectProfile(await store.loadConfig(), options.profile);
-    const apiKey = await store.resolveApiKey(config.provider.id);
+    const profileName = options.profile ?? (program.opts().profile as string | undefined);
+    const config = selectProfile(await store.loadConfig(), profileName);
+    const apiKey = await store.resolveProviderCredential(config.provider);
     const zh = config.language === "zh-CN";
-    process.stdout.write(`${pc.green("✓")} ${zh ? "配置和凭据可用" : "Configuration and credentials are available"}\n`);
+    const status = config.provider.kind === "local" && apiKey === undefined
+      ? (zh ? "配置可用（本地 Provider 未配置 API Key）" : "Configuration is available (local provider without an API key)")
+      : (zh ? "配置和凭据可用" : "Configuration and credentials are available");
+    process.stdout.write(`${pc.green("✓")} ${status}\n`);
     process.stdout.write(`  provider: ${config.provider.id}\n  model: ${config.provider.model}\n  baseURL: ${config.provider.baseURL}\n`);
     if (!options.offline) {
       const controller = new AbortController();

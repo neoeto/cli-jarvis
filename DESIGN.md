@@ -240,7 +240,7 @@ export type ModelResponse =
 
 Provider-specific payloads are normalized at this boundary. The rest of the system does not depend on OpenAI SDK response types.
 
-### 5.2 DeepSeek adapter
+### 5.2 DeepSeek and local OpenAI-compatible adapters
 
 Default configuration:
 
@@ -255,6 +255,8 @@ Default configuration:
 ```
 
 The adapter uses OpenAI-compatible Chat Completions and supports streaming only for user-visible assistant text. Tool-call arguments are accumulated completely before validation.
+
+The `local` provider kind reuses the same adapter for an already-running HTTP(S) OpenAI-compatible service. It supports optional authentication: when no credential is configured, the adapter sends no `Authorization` header and does not read `OPENAI_API_KEY`; a configured credential is sent as a Bearer token. Local services must support streaming and function/tool calling. CJ does not start, stop, download, or discover local model processes.
 
 Model arguments are always parsed as untrusted JSON and validated against the registered Tool schema. Unknown Tools, unknown fields, malformed JSON, or invalid values are returned to the model as structured errors and are never executed.
 

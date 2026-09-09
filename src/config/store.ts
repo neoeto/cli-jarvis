@@ -9,7 +9,8 @@ import {
   emptyAuthConfig,
   migrateLegacyConfig,
   type AppConfig,
-  type AuthConfig
+  type AuthConfig,
+  type ProviderConfig
 } from "./schema.js";
 import { getAppPaths, type AppPaths } from "./paths.js";
 import { assertSecureWindowsAcl } from "./windows-acl.js";
@@ -117,6 +118,20 @@ export class ConfigStore {
   async resolveApiKey(providerId: string): Promise<string> {
     const credential = (await this.loadAuth()).providers[providerId];
     if (!credential) throw new CjError("AUTH_MISSING", `No credentials configured for ${providerId}`);
+    if (credential.type === "api_key") return credential.key;
+    const value = process.env[credential.variable];
+    if (!value) {
+      throw new CjError("AUTH_MISSING", `Environment variable ${credential.variable} is not set`);
+    }
+    return value;
+  }
+
+  async resolveProviderCredential(provider: ProviderConfig): Promise<string | undefined> {
+    const credential = (await this.loadAuth()).providers[provider.id];
+    if (!credential) {
+      if (provider.kind === "local") return undefined;
+      throw new CjError("AUTH_MISSING", `No credentials configured for ${provider.id}`);
+    }
     if (credential.type === "api_key") return credential.key;
     const value = process.env[credential.variable];
     if (!value) {

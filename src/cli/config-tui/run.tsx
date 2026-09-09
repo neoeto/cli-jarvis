@@ -49,7 +49,7 @@ export async function runConfigTui(store: ConfigStore): Promise<void> {
     stateDir: store.paths.stateDir,
     signal: AbortSignal.timeout(config.limits.taskTimeoutMs),
     registrations: addedRegistrations,
-    provider: async () => createProvider(config, await store.resolveApiKey(config.provider.id))
+    provider: async () => createProvider(config, await store.resolveProviderCredential(config.provider))
   });
   for (const result of diagnostics) {
     process.stdout.write(`${result.status}\t${result.command}\t${result.entry}\t${result.message}\n`);

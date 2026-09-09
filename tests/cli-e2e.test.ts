@@ -131,6 +131,83 @@ describe("cj CLI end to end", () => {
     expect(historyRecords.some((record) => record.event === "task_finished")).toBe(true);
   });
 
+  it("runs a local profile without credentials and without forwarding OPENAI_API_KEY", async () => {
+    let requestCount = 0;
+    let authorization: string | undefined;
+    const server = createServer(async (request, response) => {
+      for await (const _chunk of request) {
+        // Drain the request before responding.
+      }
+      authorization = request.headers.authorization;
+      requestCount += 1;
+      const delta = requestCount === 1
+        ? { role: "assistant", content: "本地模型标题" }
+        : {
+            role: "assistant",
+            tool_calls: [{
+              index: 0,
+              id: "call-finish",
+              type: "function",
+              function: { name: "finish_task", arguments: '{"answer":"本地模型完成"}' }
+            }]
+          };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-local-${requestCount}`,
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "local-model",
+          choices: [{ index: 0, finish_reason: requestCount === 1 ? "stop" : "tool_calls", delta }]
+        })}\n\ndata: [DONE]\n\n`
+      );
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "cj-local-e2e-workspace-"));
+    const configDirectory = await mkdtemp(path.join(os.tmpdir(), "cj-local-e2e-config-"));
+    created.push(workspace, configDirectory);
+    const entry = path.resolve("src/cli/index.ts");
+    const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+    const childEnvironment: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      PATHEXT: process.env.PATHEXT,
+      OPENAI_API_KEY: "must-not-be-forwarded",
+      CJ_CONFIG_DIR: configDirectory,
+      NO_COLOR: "1"
+    };
+
+    const added = await execFileAsync(
+      process.execPath,
+      ["--import", tsxImport, entry, "config", "profile", "add", "local", "--provider", "ollama", "--kind", "local", "--base-url", `http://127.0.0.1:${address.port}/v1`, "--model", "local-model"],
+      { cwd: workspace, env: childEnvironment, timeout: 15_000 }
+    );
+    expect(added.stderr).toBe("");
+
+    const doctor = await execFileAsync(
+      process.execPath,
+      ["--import", tsxImport, entry, "doctor", "--offline", "--profile", "local"],
+      { cwd: workspace, env: childEnvironment, timeout: 15_000 }
+    );
+    expect(doctor.stderr).toBe("");
+    expect(doctor.stdout).toContain("本地 Provider 未配置 API Key");
+
+    const result = await execFileAsync(
+      process.execPath,
+      ["--import", tsxImport, entry, "--json", "--profile", "local", "完成本地任务"],
+      { cwd: workspace, env: childEnvironment, timeout: 15_000 }
+    );
+    expect(result.stderr).toBe("");
+    expect(requestCount).toBe(2);
+    expect(authorization).toBeUndefined();
+    expect(result.stdout).toContain("本地模型完成");
+  });
+
   it("fails closed before a high-risk Tool in a non-interactive process", async () => {
     let requestCount = 0;
     const server = createServer(async (request, response) => {

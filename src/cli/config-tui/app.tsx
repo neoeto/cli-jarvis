@@ -165,7 +165,8 @@ export function ConfigTuiApp({ initial, onApply, validateExternalCommand, extern
       { label: tr("模型", "Model"), value: profile.provider.model, activate: () => openEditor({ title: tr("模型", "Model"), value: profile.provider.model, submit: (value) => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, provider: { ...item.provider, model: value.trim() } }))) }) },
       { label: tr("Provider 类型", "Provider kind"), value: profile.provider.kind, activate: () => setChoice({ title: tr("Provider 类型", "Provider kind"), choices: [
         { label: "deepseek", run: () => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, provider: { ...item.provider, kind: "deepseek" } }))) },
-        { label: "openai-compatible", run: () => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, provider: { ...item.provider, kind: "openai-compatible" } }))) }
+        { label: "openai-compatible", run: () => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, provider: { ...item.provider, kind: "openai-compatible" } }))) },
+        { label: "local", run: () => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, provider: { ...item.provider, kind: "local", thinking: false } }))) }
       ] }) },
       { label: "Thinking", value: profile.provider.thinking ? tr("开启", "on") : tr("关闭", "off"), activate: () => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, provider: { ...item.provider, thinking: !item.provider.thinking } }))) },
       { label: tr("最大工具调用", "Max Tool calls"), value: String(profile.limits.maxToolCalls), activate: () => openEditor({ title: tr("最大工具调用", "Max Tool calls"), value: String(profile.limits.maxToolCalls), submit: (value) => setDraft((current) => updateActiveProfile(current, (item) => ({ ...item, limits: { ...item.limits, maxToolCalls: numberValue(value, "Max Tool calls") } }))) }) },

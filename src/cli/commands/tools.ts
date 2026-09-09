@@ -138,7 +138,7 @@ Examples:
       signal: AbortSignal.timeout(config.limits.taskTimeoutMs),
       force,
       ...(registrations ? { registrations } : {}),
-      ...(refresh ? { provider: async () => createProvider(config, await store.resolveApiKey(config.provider.id)) } : {})
+      ...(refresh ? { provider: async () => createProvider(config, await store.resolveProviderCredential(config.provider)) } : {})
     });
   };
 

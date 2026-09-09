@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added the `local` provider kind for already-running unauthenticated or optionally authenticated OpenAI-compatible LLM services.
 - Added the low-risk `get_current_time` built-in Tool, which reads the host system clock and supports optional IANA time-zone formatting.
 
 ## 1.0.0

@@ -65,6 +65,30 @@ describe("config TUI rendering", () => {
     app.unmount();
   });
 
+  it("renders a local provider profile without requiring credentials", () => {
+    const localProvider = {
+      ...defaultConfig.provider,
+      id: "ollama",
+      baseURL: "http://127.0.0.1:11434/v1",
+      model: "qwen3:8b",
+      kind: "local" as const
+    };
+    const app = render(<ConfigTuiApp
+      initial={createConfigDraft({
+        ...defaultConfig,
+        provider: localProvider,
+        profiles: { default: { provider: localProvider, limits: defaultConfig.limits } }
+      }, { version: 1, providers: {} })}
+      externalEntries={{}}
+      validateExternalCommand={async (value) => ({ registration: { command: value, subcommand: [] }, entry: "/usr/bin/example" })}
+      onApply={async () => undefined}
+    />);
+    const frame = app.lastFrame() ?? "";
+    expect(frame).toContain("Provider 类型: local");
+    expect(frame).not.toContain("API Key");
+    app.unmount();
+  });
+
   it("shows a dedicated Tavily web-search settings page", async () => {
     const app = render(<ConfigTuiApp
       initial={createConfigDraft({ ...defaultConfig, webSearch: { enabled: true } }, {

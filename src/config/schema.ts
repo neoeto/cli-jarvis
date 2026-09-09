@@ -7,8 +7,16 @@ export const providerConfigSchema = z.object({
   model: z.string().min(1),
   /** The only provider-specific setting currently supported by the DeepSeek adapter. */
   thinking: z.boolean(),
-  kind: z.enum(["deepseek", "openai-compatible"]).default("openai-compatible")
-}).strict();
+  kind: z.enum(["deepseek", "openai-compatible", "local"]).default("openai-compatible")
+}).strict().superRefine((value, context) => {
+  if (value.kind === "local" && !["http:", "https:"].includes(new URL(value.baseURL).protocol)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["baseURL"],
+      message: "Local provider base URL must use http or https"
+    });
+  }
+});
 
 export const profileSchema = z.object({
   provider: providerConfigSchema,

@@ -56,6 +56,48 @@ describe("ConfigStore", () => {
     }
   });
 
+  it("allows local providers to run without credentials and supports optional credentials", async () => {
+    const store = await temporaryStore();
+    const localProvider = {
+      ...defaultConfig.provider,
+      id: "ollama",
+      baseURL: "http://127.0.0.1:11434/v1",
+      kind: "local" as const
+    };
+
+    await expect(store.resolveProviderCredential(localProvider)).resolves.toBeUndefined();
+    await store.saveAuth({ version: 1, providers: { ollama: { type: "api_key", key: "local-secret" } } });
+    await expect(store.resolveProviderCredential(localProvider)).resolves.toBe("local-secret");
+
+    await store.saveAuth({ version: 1, providers: { ollama: { type: "env", variable: "CJ_LOCAL_TEST_KEY" } } });
+    const previous = process.env.CJ_LOCAL_TEST_KEY;
+    process.env.CJ_LOCAL_TEST_KEY = "local-env-secret";
+    try {
+      await expect(store.resolveProviderCredential(localProvider)).resolves.toBe("local-env-secret");
+    } finally {
+      if (previous === undefined) delete process.env.CJ_LOCAL_TEST_KEY;
+      else process.env.CJ_LOCAL_TEST_KEY = previous;
+    }
+  });
+
+  it("keeps credentials mandatory for non-local providers", async () => {
+    const store = await temporaryStore();
+    await expect(store.resolveProviderCredential(defaultConfig.provider)).rejects.toMatchObject({ code: "AUTH_MISSING" });
+  });
+
+  it("accepts local HTTP(S) URLs and rejects other URL schemes", async () => {
+    const store = await temporaryStore();
+    const local = {
+      ...defaultConfig,
+      provider: { ...defaultConfig.provider, kind: "local" as const, baseURL: "https://local-model.example.test/v1" }
+    };
+    await expect(store.saveConfig(local)).resolves.toBeUndefined();
+    await expect(store.saveConfig({
+      ...local,
+      provider: { ...local.provider, baseURL: "file:///tmp/model" }
+    })).rejects.toThrow(/http or https/i);
+  });
+
   it("validates both configuration documents before batch settings save", async () => {
     const store = await temporaryStore();
     const invalidAuth = { version: 1, providers: { deepseek: { type: "env", variable: "not-valid" } } } as unknown as Parameters<ConfigStore["saveSettings"]>[1];

@@ -23,6 +23,15 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
     const provider = await input({ message: "Provider ID", default: current.provider.id });
     const baseURL = await input({ message: zh ? "API 地址" : "Base URL", default: current.provider.baseURL });
     const model = await input({ message: zh ? "模型" : "Model", default: current.provider.model });
+    const kind = await select<"deepseek" | "openai-compatible" | "local">({
+      message: zh ? "Provider 类型" : "Provider kind",
+      default: current.provider.kind,
+      choices: [
+        { name: "deepseek", value: "deepseek" },
+        { name: "openai-compatible", value: "openai-compatible" },
+        { name: "local", value: "local" }
+      ]
+    });
     const language = await select({
       message: zh ? "界面语言" : "Display language",
       default: current.language,
@@ -31,39 +40,41 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
         { name: "English", value: "en" as const }
       ]
     });
-    const storage = await select({
-      message: zh ? "API Key 保存方式" : "API Key storage",
-      choices: [
-        { name: zh ? "保存到仅当前用户可读的 auth.json" : "Save in owner-only auth.json", value: "api_key" as const },
-        { name: zh ? "从环境变量读取" : "Read from an environment variable", value: "env" as const }
-      ]
-    });
-
-    const credential = storage === "api_key"
-      ? {
-          type: "api_key" as const,
-          key: await password({ message: "API Key", mask: "*", validate: (value) => value.length > 0 || (zh ? "必填" : "Required") })
-        }
-      : {
-          type: "env" as const,
-          variable: await input({
-            message: zh ? "环境变量名" : "Environment variable",
-            default: "DEEPSEEK_API_KEY",
-            validate: (value) => /^[A-Z_][A-Z0-9_]*$/.test(value) || (zh ? "请使用大写环境变量名" : "Use an uppercase environment variable name")
-          })
-        };
-
-    const providerConfig = { id: provider, baseURL, model, thinking: false, kind: provider === "deepseek" ? "deepseek" as const : "openai-compatible" as const };
+    const providerConfig = { id: provider, baseURL, model, thinking: false, kind };
+    if (kind !== "local") {
+      const storage = await select({
+        message: zh ? "API Key 保存方式" : "API Key storage",
+        choices: [
+          { name: zh ? "保存到仅当前用户可读的 auth.json" : "Save in owner-only auth.json", value: "api_key" as const },
+          { name: zh ? "从环境变量读取" : "Read from an environment variable", value: "env" as const }
+        ]
+      });
+      const credential = storage === "api_key"
+        ? {
+            type: "api_key" as const,
+            key: await password({ message: "API Key", mask: "*", validate: (value) => value.length > 0 || (zh ? "必填" : "Required") })
+          }
+        : {
+            type: "env" as const,
+            variable: await input({
+              message: zh ? "环境变量名" : "Environment variable",
+              default: "DEEPSEEK_API_KEY",
+              validate: (value) => /^[A-Z_][A-Z0-9_]*$/.test(value) || (zh ? "请使用大写环境变量名" : "Use an uppercase environment variable name")
+            })
+          };
+      await store.saveAuth({
+        ...currentAuth,
+        providers: { ...currentAuth.providers, [provider]: credential }
+      });
+    }
     await store.saveConfig({
       ...current,
       provider: providerConfig,
       language
     });
-    await store.saveAuth({
-      ...currentAuth,
-      providers: { ...currentAuth.providers, [provider]: credential }
-    });
-    process.stdout.write(zh ? "配置已保存。\n" : "Configuration saved.\n");
+    process.stdout.write(kind === "local"
+      ? (zh ? "配置已保存。本地 Provider 不要求 API Key。\n" : "Configuration saved. Local providers do not require an API key.\n")
+      : (zh ? "配置已保存。\n" : "Configuration saved.\n"));
   });
 
   command
@@ -96,7 +107,7 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
     .requiredOption("--provider <id>", "provider identifier")
     .requiredOption("--base-url <url>", "OpenAI-compatible base URL")
     .requiredOption("--model <model>", "model identifier")
-    .option("--kind <kind>", "deepseek or openai-compatible", "openai-compatible")
+    .option("--kind <kind>", "deepseek, openai-compatible or local", "openai-compatible")
     .option("--thinking", "enable DeepSeek thinking")
     .option("--max-tool-calls <number>", "maximum tool calls")
     .option("--task-timeout <ms>", "overall task timeout in milliseconds")
@@ -104,8 +115,8 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
       provider: string; baseUrl: string; model: string; kind: string; thinking?: boolean; maxToolCalls?: string; taskTimeout?: string;
     }) => {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) throw new CjError("CONFIG_INVALID", "Invalid profile name");
-      if (options.kind !== "deepseek" && options.kind !== "openai-compatible") {
-        throw new CjError("CONFIG_INVALID", "kind must be deepseek or openai-compatible");
+      if (options.kind !== "deepseek" && options.kind !== "openai-compatible" && options.kind !== "local") {
+        throw new CjError("CONFIG_INVALID", "kind must be deepseek, openai-compatible or local");
       }
       const config = await store.loadConfig();
       const base = config.profiles[name]?.limits ?? config.limits;
@@ -120,7 +131,7 @@ export function addConfigCommand(program: Command, store: ConfigStore): void {
         baseURL: options.baseUrl,
         model: options.model,
         thinking: options.thinking ?? false,
-        kind: options.kind as "deepseek" | "openai-compatible"
+        kind: options.kind as "deepseek" | "openai-compatible" | "local"
       };
       // Validate through the shared config schema before persisting.
       await store.saveConfig({

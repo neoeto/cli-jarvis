@@ -6,17 +6,17 @@ import { OpenAICompatibleProvider } from "./openai-compatible.js";
  * OpenAI-compatible providers. The legacy name remains exported for callers
  * that only use the default profile.
  */
-export function createProvider(config: AppConfig, apiKey: string): OpenAICompatibleProvider {
+export function createProvider(config: AppConfig, apiKey?: string): OpenAICompatibleProvider {
   return new OpenAICompatibleProvider({
     id: config.provider.id,
-    apiKey,
     baseURL: config.provider.baseURL,
+    ...(apiKey === undefined ? {} : { apiKey }),
     ...(config.provider.kind === "deepseek"
       ? { extraBody: { thinking: { type: config.provider.thinking ? "enabled" : "disabled" } } }
       : {})
   });
 }
 
-export function createDeepSeekProvider(config: AppConfig, apiKey: string): OpenAICompatibleProvider {
+export function createDeepSeekProvider(config: AppConfig, apiKey?: string): OpenAICompatibleProvider {
   return createProvider(config, apiKey);
 }

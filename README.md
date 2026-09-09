@@ -5,7 +5,7 @@
 ## Requirements
 
 - Node.js 20 or newer
-- An API key for DeepSeek or another OpenAI-compatible provider
+- A DeepSeek or other OpenAI-compatible provider; API keys are only required by providers that use authentication
 
 ## Install for development
 
@@ -28,9 +28,14 @@ cj config profile add work --provider openai --base-url https://example.invalid/
 cj config credential set-env openai OPENAI_API_KEY
 cj config profile use work
 cj doctor
+
+# Connect to an already-running local OpenAI-compatible server
+cj config profile add ollama --provider ollama --kind local --base-url http://127.0.0.1:11434/v1 --model qwen3:8b
+cj config profile use ollama
+cj doctor
 ```
 
-The default provider is DeepSeek `deepseek-v4-flash` in non-thinking mode. Non-secret settings and credentials are stored separately in the operating system's per-user application-data directory. Literal API Keys use an owner-only credential file; environment-variable references are also supported.
+The default provider is DeepSeek `deepseek-v4-flash` in non-thinking mode. Local profiles connect to an already-running HTTP(S) OpenAI-compatible service and do not require an API key. The local service must support streaming Chat Completions and function/tool calling; `cj` does not start or manage the model process. If a local service requires authentication, configure its optional credential with `cj config credential set-env` or the TUI. Non-secret settings and credentials are stored separately in the operating system's per-user application-data directory. Literal API Keys use an owner-only credential file; environment-variable references are also supported.
 
 `cj doctor --offline` validates local configuration without making a model request. Use `--profile <name>` for a one-off profile selection; no API key can be supplied on the command line.
 
