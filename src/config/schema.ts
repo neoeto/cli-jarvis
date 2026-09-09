@@ -36,8 +36,13 @@ const legacyConfigSchema = z.object({
   })
 }).strict();
 
+const externalCliCommandSchema = z.string().min(1).max(255).regex(/^[^\s\\/:\0]+$/, "CLI commands must be a single PATH command name");
+const externalCliDirectoriesSchema = z.object({
+  directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([])
+}).strict().default({ directories: [] });
+
 export const appConfigSchema = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   /** A compatibility mirror of the active profile's provider. Never edit it directly. */
   provider: providerConfigSchema,
   activeProfile: z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
@@ -56,7 +61,40 @@ export const appConfigSchema = z.object({
   }).default({ allowedRoots: ["."] }),
   memory: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
   webSearch: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
-  externalCli: z.object({ directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([]) }).strict().default({ directories: [] }),
+  externalCli: z.object({ commands: z.array(externalCliCommandSchema).max(100).default([]) }).strict().default({ commands: [] }),
+  plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] }),
+  skills: z.object({
+    trustedWorkspaceDirectories: z.array(z.object({
+      directory: z.string().min(1).refine((value) => path.isAbsolute(value), "Skill directory must be absolute"),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/)
+    }).strict()).max(100).default([])
+  }).strict().default({ trustedWorkspaceDirectories: [] })
+}).strict().superRefine((value, context) => {
+  if (!value.profiles[value.activeProfile]) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["activeProfile"], message: "Active profile does not exist" });
+  }
+});
+
+/** The v2 profile configuration; directory registrations are intentionally discarded in v3. */
+const previousConfigSchema = z.object({
+  version: z.literal(2),
+  provider: providerConfigSchema,
+  activeProfile: z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
+  profiles: z.record(z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/), profileSchema).refine(
+    (profiles) => Object.keys(profiles).length > 0,
+    "At least one profile is required"
+  ),
+  language: z.enum(["zh-CN", "en"]),
+  limits: profileSchema.shape.limits,
+  security: z.object({
+    allowedRoots: z.array(z.string().min(1).refine(
+      (value) => !/^(?:[a-zA-Z]:[\\/]|[\\/]|\.\.(?:[\\/]|$))/.test(value),
+      "Authorization roots must be workspace-relative"
+    )).min(1).max(100).default(["."])
+  }).default({ allowedRoots: ["."] }),
+  memory: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
+  webSearch: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
+  externalCli: externalCliDirectoriesSchema,
   plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] }),
   skills: z.object({
     trustedWorkspaceDirectories: z.array(z.object({
@@ -76,7 +114,7 @@ export type ProfileConfig = z.infer<typeof profileSchema>;
 export type LegacyAppConfig = z.infer<typeof legacyConfigSchema>;
 
 export const defaultConfig: AppConfig = {
-  version: 2,
+  version: 3,
   provider: {
     id: "deepseek",
     baseURL: "https://api.deepseek.com",
@@ -114,13 +152,18 @@ export const defaultConfig: AppConfig = {
   security: { allowedRoots: ["."] },
   memory: { enabled: false },
   webSearch: { enabled: false },
-  externalCli: { directories: [] },
+  externalCli: { commands: [] },
   plugins: { enabled: [] },
   skills: { trustedWorkspaceDirectories: [] }
 };
 
 /** Convert the original single-provider file without changing its credentials. */
 export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
+  const previous = previousConfigSchema.safeParse(input);
+  if (previous.success) {
+    const { externalCli: _discardedDirectories, ...config } = previous.data;
+    return { ...config, version: 3, externalCli: { commands: [] } };
+  }
   const legacy = legacyConfigSchema.safeParse(input);
   if (!legacy.success) return undefined;
   const kind = legacy.data.provider.id === "deepseek" ? "deepseek" as const : "openai-compatible" as const;
@@ -132,7 +175,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     maxOutputBytes: 512 * 1024
   };
   return {
-    version: 2,
+    version: 3,
     provider,
     activeProfile: "default",
     profiles: { default: { provider, limits } },
@@ -141,7 +184,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     security: { allowedRoots: ["."] },
     memory: { enabled: false },
     webSearch: { enabled: false },
-    externalCli: { directories: [] },
+    externalCli: { commands: [] },
     plugins: { enabled: [] },
     skills: { trustedWorkspaceDirectories: [] }
   };

@@ -3,6 +3,7 @@ import textWidth from "string-width";
 import type { AgentEvent, EventSink } from "../../agent/events.js";
 import { redactSecrets } from "../../policy/sensitive-data.js";
 import { renderMarkdown } from "./markdown.js";
+import { formatUsage } from "../../providers/usage.js";
 
 type Colors = ReturnType<typeof pc.createColors>;
 
@@ -45,11 +46,15 @@ function confirmationPanel(
     label(zh ? "可恢复" : "reversible", request.reversible === undefined ? (zh ? "未知" : "unknown") : request.reversible ? (zh ? "是" : "yes") : (zh ? "否" : "no")),
     ...request.targets.map((target) => label(zh ? "目标" : "target", target))
   ];
+  return highlightedConfirmationPanel(zh ? "! 需要确认" : "! Confirmation required", rawLines, colors);
+}
+
+function highlightedConfirmationPanel(title: string, rawLines: string[], colors: Colors): string {
   const terminalColumns = typeof process.stderr.columns === "number" ? process.stderr.columns : 100;
   const width = Math.max(42, Math.min(96, terminalColumns - 6));
   const lines = rawLines.flatMap((line) => wrapText(line, width));
   // Use a fixed-width marker: terminals disagree on whether ⚠ takes one or two cells.
-  const header = ` ${zh ? "! 需要确认" : "! Confirmation required"} `;
+  const header = ` ${title} `;
   const headerWidth = textWidth(header);
   // The top line has `┏━` before the title and `┓` after its fill, while
   // content lines and the bottom border occupy width + 4 cells. Keep the
@@ -75,12 +80,12 @@ function batchConfirmationPanel(
   language: "zh-CN" | "en",
   colors: Colors
 ): string {
-  const title = language === "zh-CN" ? `⚠ 需要确认（${requests.length} 个操作）` : `⚠ Confirmation required (${requests.length} operations)`;
+  const title = language === "zh-CN" ? `! 需要确认（${requests.length} 个操作）` : `! Confirmation required (${requests.length} operations)`;
   const rows = requests.flatMap((request, index) => [
     `${index + 1}. ${request.toolName}: ${request.summary}`,
     ...(request.targets.length ? [`   ${language === "zh-CN" ? "目标" : "targets"}: ${request.targets.join(", ")}`] : [])
   ]);
-  return `${colors.yellow(title)}\n${rows.map((row) => `  ${row}`).join("\n")}`;
+  return highlightedConfirmationPanel(title, rows, colors);
 }
 
 export function createHumanRenderer(options: {
@@ -171,6 +176,15 @@ export function createHumanRenderer(options: {
       }
       case "memory_used":
         muted(zh ? "记忆" : "Memory", zh ? `使用了 ${event.ids.length} 条本地记忆：${event.purpose}` : `Used ${event.ids.length} local memory fact(s): ${event.purpose}`);
+        break;
+      case "task_title":
+      case "model_usage":
+        break;
+      case "usage_summary":
+        muted(
+          zh ? (event.scope === "session" ? "会话用量" : "本轮用量") : (event.scope === "session" ? "Session usage" : "Task usage"),
+          formatUsage(event, options.language)
+        );
         break;
     }
   };

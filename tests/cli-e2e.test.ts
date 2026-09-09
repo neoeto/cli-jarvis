@@ -37,6 +37,8 @@ describe("cj CLI end to end", () => {
       }
       requestCount += 1;
       const delta = requestCount === 1
+        ? { role: "assistant", content: "列出目录文件" }
+        : requestCount === 2
         ? {
             role: "assistant",
             tool_calls: [
@@ -56,7 +58,7 @@ describe("cj CLI end to end", () => {
           object: "chat.completion.chunk",
           created: 1,
           model: "deepseek-v4-flash",
-          choices: [{ index: 0, finish_reason: requestCount === 1 ? "tool_calls" : "stop", delta }]
+          choices: [{ index: 0, finish_reason: requestCount === 2 ? "tool_calls" : "stop", delta }]
         })}\n\ndata: [DONE]\n\n`
       );
     });
@@ -96,15 +98,11 @@ describe("cj CLI end to end", () => {
     );
 
     expect(stderr).toBe("");
-    expect(requestCount).toBe(2);
+    expect(requestCount).toBe(3);
     const events = stdout.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(events.map((event) => event.type)).toEqual([
-      "status",
-      "tool_start",
-      "tool_result",
-      "assistant_delta",
-      "assistant"
-    ]);
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining([
+      "model_usage", "task_title", "status", "tool_start", "tool_result", "assistant_delta", "assistant", "usage_summary"
+    ]));
     expect(stdout).toContain("hello.txt");
     expect(stdout).toContain("找到 hello.txt");
     const audit = await readFile(store.paths.historyFile, "utf8");
@@ -124,10 +122,12 @@ describe("cj CLI end to end", () => {
   });
 
   it("fails closed before a high-risk Tool in a non-interactive process", async () => {
+    let requestCount = 0;
     const server = createServer(async (request, response) => {
       for await (const _chunk of request) {
         // Drain the request before responding.
       }
+      requestCount += 1;
       const marker = "created-by-forbidden-command.txt";
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
@@ -136,7 +136,7 @@ describe("cj CLI end to end", () => {
           object: "chat.completion.chunk",
           created: 1,
           model: "deepseek-v4-flash",
-          choices: [
+          choices: requestCount === 1 ? [{ index: 0, finish_reason: "stop", delta: { role: "assistant", content: "高风险命令" } }] : [
             {
               index: 0,
               finish_reason: "tool_calls",

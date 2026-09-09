@@ -7,6 +7,7 @@ import pc from "picocolors";
 import { AgentRuntime } from "../agent/runtime.js";
 import type { EventSink } from "../agent/events.js";
 import type { AgentMessage } from "../providers/types.js";
+import { mergeUsageSummaries, TrackedModelProvider, UsageAccumulator, type UsageSummary } from "../providers/usage.js";
 import { addConfigCommand } from "./commands/config.js";
 import { addToolsCommand } from "./commands/tools.js";
 import { ConfigStore } from "../config/store.js";
@@ -28,7 +29,7 @@ import { createTerminalConfirmation } from "./confirmation.js";
 import { AuditStore } from "../audit/store.js";
 import { addHistoryCommand } from "./commands/history.js";
 import { createReadlineSessionInput } from "./session/input.js";
-import { formatTaskHistory, formatTools, runInteractiveSession } from "./session/repl.js";
+import { formatGroupedHistory, formatTaskHistory, formatTools, runInteractiveSession } from "./session/repl.js";
 import { MemoryStore } from "../memory/store.js";
 import { addMemoryCommand } from "./commands/memory.js";
 import { resolveAllowedRoots } from "../policy/paths.js";
@@ -42,6 +43,7 @@ import { AskQuestionTool } from "../tools/builtins/ask-question.js";
 import { SearchWebTool } from "../tools/builtins/search-web.js";
 import { createTerminalQuestion } from "./question.js";
 import path from "node:path";
+import { createTaskTitle } from "../agent/title.js";
 
 const CLI_VERSION = "1.0.0";
 const program = new Command();
@@ -93,6 +95,12 @@ interface ExecuteTaskOptions {
   maxToolCalls?: number;
   onToolExecuted?: () => void;
   sessionId?: string;
+}
+
+interface ExecuteTaskResult {
+  content: string;
+  taskId: string;
+  usage: UsageSummary;
 }
 
 const loadedPlugins = new Set<string>();
@@ -149,7 +157,7 @@ function resolveTimeout(config: AppConfig, value: string | undefined): number {
   return requestedTimeout;
 }
 
-async function executeTask(options: ExecuteTaskOptions): Promise<string> {
+async function executeTask(options: ExecuteTaskOptions): Promise<ExecuteTaskResult> {
   const auditContext = audit.createTaskContext({
     cliVersion: CLI_VERSION,
     cwd: options.workspaceRoot,
@@ -160,28 +168,43 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
   });
   await audit.taskStarted(auditContext);
   await audit.agentEvent(auditContext.taskId, { type: "task_status", taskId: auditContext.taskId, status: "queued" });
-  let render: EventSink | undefined;
+  const renderer = options.json
+    ? jsonlRenderer
+    : createHumanRenderer({
+        verbose: options.verbose || options.taskEvents === true,
+        language: options.language,
+        plain: options.plain,
+        noColor: options.noColor
+      });
+  const emit: EventSink = async (event) => {
+    if ((event.type !== "task_status" && event.type !== "task_step") || options.taskEvents) await renderer(event);
+    await audit.agentEvent(auditContext.taskId, event);
+  };
+  const usage = new UsageAccumulator();
+  const baseProvider = createProvider(options.config, options.apiKey);
+  const tracked = (purpose: string) => new TrackedModelProvider(baseProvider, purpose, usage, emit);
 
   try {
+    const { title, generated } = await createTaskTitle({
+      provider: tracked("title"),
+      model: options.config.provider.model,
+      prompt: options.prompt,
+      language: options.language,
+      signal: options.signal,
+      timeoutMs: Math.min(5_000, options.config.limits.modelTimeoutMs)
+    });
+    await emit({ type: "task_title", title, generated });
+
     await configureExtensions(options.config);
     const skillCatalog = await configureSkills(options.config, options.workspaceRoot);
     const allowedRoots = await resolveAllowedRoots(options.workspaceRoot, options.config.security.allowedRoots);
     const memoryFacts = options.config.memory.enabled ? await memoryStore.list() : [];
-    const renderer = options.json
-      ? jsonlRenderer
-      : createHumanRenderer({
-          verbose: options.verbose || options.taskEvents === true,
-          language: options.language,
-          plain: options.plain,
-          noColor: options.noColor
-        });
-    render = renderer;
     const externalConfig = await store.loadConfig();
-    if (externalConfig.externalCli.directories.length) {
+    if (externalConfig.externalCli.commands.length) {
       await renderer({ type: "status", message: options.language === "zh-CN" ? "正在检查外部 CLI 及其用法说明…" : "Checking external CLIs and documentation…" });
     }
     const externalDiagnostics = await refreshExternalTools({ registry, config: { ...options.config, externalCli: externalConfig.externalCli }, stateDir: store.paths.stateDir,
-      provider: async () => createProvider(options.config, options.apiKey), signal: options.signal });
+      provider: async () => tracked("external_cli_review"), signal: options.signal });
     if (externalDiagnostics.length) {
       const registered = externalDiagnostics.reduce((sum, item) => sum + item.tools.length, 0);
       const event = { type: "status" as const, message: options.language === "zh-CN"
@@ -191,7 +214,7 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
       await audit.agentEvent(auditContext.taskId, event);
     }
     const runtime = new AgentRuntime({
-      provider: createProvider(options.config, options.apiKey),
+      provider: tracked("agent"),
       model: options.config.provider.model,
       registry,
       workspaceRoot: options.workspaceRoot,
@@ -217,14 +240,13 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
       ...(options.interactive ? { askQuestion: createTerminalQuestion(options.language) } : {}),
       ...(options.onQuestionWaiting ? { onQuestionWaiting: options.onQuestionWaiting } : {}),
       policy: new PolicyEngine({ workspaceRoot: options.workspaceRoot, allowedRoots }),
-      onEvent: async (event) => {
-        if ((event.type !== "task_status" && event.type !== "task_step") || options.taskEvents) await renderer(event);
-        await audit.agentEvent(auditContext.taskId, event);
-      }
+      onEvent: emit
     });
     const result = await runtime.run(options.prompt);
+    const taskUsage = usage.summary();
+    await emit({ type: "usage_summary", scope: "task", ...taskUsage });
     await audit.taskFinished(auditContext.taskId, true);
-    return result;
+    return { content: result, taskId: auditContext.taskId, usage: taskUsage };
   } catch (error) {
     const normalized = options.isTimedOut?.()
       ? new CjError("LIMIT_EXCEEDED", `Task exceeded timeout of ${options.timeoutMs}ms`, { cause: error })
@@ -235,8 +257,9 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
       status: normalized.code === "ABORTED" ? "cancelled" : "failed",
       detail: normalized.code
     } as const;
-    if (options.taskEvents && render) await render(statusEvent);
-    await audit.agentEvent(auditContext.taskId, statusEvent);
+    await emit(statusEvent);
+    const taskUsage = usage.summary();
+    await emit({ type: "usage_summary", scope: "task", ...taskUsage });
     await audit.taskFinished(auditContext.taskId, false, normalized.code);
     throw normalized;
   }
@@ -244,7 +267,7 @@ async function executeTask(options: ExecuteTaskOptions): Promise<string> {
 
 async function executeTaskWithController(
   options: Omit<ExecuteTaskOptions, "signal" | "isTimedOut" | "onQuestionWaiting"> & { controller: AbortController }
-): Promise<string> {
+): Promise<ExecuteTaskResult> {
   let timedOut = false;
   let remainingMs = options.timeoutMs;
   let startedAt = performance.now();
@@ -307,10 +330,10 @@ Examples:
   cj "List the largest files in this directory"
   cj chat
   cj config
-  cj config cli-dir add /absolute/path/to/cli-tools
+  cj tools register <command>
   cj tools doctor
 
-External CLI capabilities are discovered and reviewed before each task.
+Registered PATH CLI capabilities are refreshed and reviewed before each task.
 Use cj <command> --help for command-specific usage.
 `)
   .action(async (
@@ -382,10 +405,33 @@ program
     let turns = 0;
     let retryPrompt: string | undefined;
     let retryToolCalls = 0;
+    let sessionUsage: UsageSummary = { requests: 0, unknownRequests: 0, cacheReportedRequests: 0, reasoningReportedRequests: 0 };
     const input = createReadlineSessionInput(process.stdin, process.stderr);
     const sessionColors = pc.createColors(pc.isColorSupported && !(options.plain || options.color === false));
     const write = (message: string): void => {
       process.stdout.write(`${message}\n`);
+    };
+    const sessionRenderer = createHumanRenderer({
+      verbose: options.verbose ?? false,
+      language,
+      plain: options.plain ?? false,
+      noColor: options.color === false
+    });
+    const refreshSessionUsage = async (): Promise<void> => {
+      const tasks = (await audit.listTaskSummaries(Number.MAX_SAFE_INTEGER)).filter((task) => task.sessionId === sessionId);
+      sessionUsage = tasks.reduce<UsageSummary>((total, task) => mergeUsageSummaries(total, {
+        ...(task.usage ? { usage: task.usage } : {}),
+        requests: task.usageRequests,
+        unknownRequests: task.unknownUsageRequests,
+        cacheReportedRequests: task.cacheReportedRequests,
+        reasoningReportedRequests: task.reasoningReportedRequests
+      }), { requests: 0, unknownRequests: 0, cacheReportedRequests: 0, reasoningReportedRequests: 0 });
+      const latest = tasks.at(-1);
+      if (latest) {
+        const event = { type: "usage_summary" as const, scope: "session" as const, ...sessionUsage };
+        await sessionRenderer(event);
+        await audit.agentEvent(latest.taskId, event);
+      }
     };
 
     await runInteractiveSession({
@@ -433,6 +479,7 @@ program
           turns += 1;
         } finally {
           signal.removeEventListener("abort", forwardAbort);
+          await refreshSessionUsage();
         }
       },
       clear: () => {
@@ -445,7 +492,8 @@ program
         contextMessages: transcript.length,
         provider: config.provider.id,
         model: config.provider.model,
-        workspaceRoot
+        workspaceRoot,
+        usage: sessionUsage
       }),
       tools: () => formatTools(
         registry.entries().map((tool) => ({
@@ -455,7 +503,7 @@ program
         })),
         language
       ),
-      history: async () => formatTaskHistory(await audit.listTaskSummaries(50), language),
+      history: async () => formatGroupedHistory(await audit.listHistorySummaries(50), language),
       last: async () => {
         const records = await audit.list(1);
         return records.length ? formatTaskHistory(await audit.listTaskSummaries(1), language) : (language === "zh-CN" ? "暂无历史记录。" : "No history.");

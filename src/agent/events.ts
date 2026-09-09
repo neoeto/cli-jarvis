@@ -1,6 +1,7 @@
 import type { RecoveryInfo, RiskLevel } from "../tools/types.js";
 import type { ConfirmationRequest } from "../policy/engine.js";
 import type { QuestionRequest } from "./questions.js";
+import type { ModelUsage } from "../providers/types.js";
 
 export type AgentEvent =
   | { type: "status"; message: string }
@@ -19,7 +20,10 @@ export type AgentEvent =
   | { type: "reasoning"; content: string }
   | { type: "assistant_delta"; content: string }
   | { type: "assistant"; content: string; streamed?: boolean }
-  | { type: "memory_used"; ids: string[]; purpose: string };
+  | { type: "memory_used"; ids: string[]; purpose: string }
+  | { type: "task_title"; title: string; generated: boolean }
+  | { type: "model_usage"; requestId: string; model: string; purpose: string; success: boolean; usage?: ModelUsage }
+  | { type: "usage_summary"; scope: "task" | "session"; usage?: ModelUsage; requests: number; unknownRequests: number; cacheReportedRequests: number; reasoningReportedRequests: number };
 
 export type TaskStatus = "queued" | "planning" | "waiting_confirmation" | "waiting_question" | "running" | "completed" | "failed" | "cancelled";
 

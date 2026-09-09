@@ -44,6 +44,9 @@ cj config tui                 Open the full-screen application settings interfac
 cj config list                Show configuration with secrets redacted
 cj tools list                 List registered Tools
 cj tools show <name>          Show Tool schema, behavior, and risk metadata
+cj tools register <command>   Register and immediately review one PATH executable
+cj tools unregister <command> Remove one PATH executable registration
+cj tools registrations        Show PATH registrations and cached review state
 cj skills list                List available local Agent Skills
 cj skills trust               Trust this workspace's .agents/skills content
 cj skills show <name>         Show a Skill's metadata and redacted instructions
@@ -67,7 +70,13 @@ Global options:
 
 There is deliberately no global `--yes`, permanent trust switch, or automatic `sudo` option.
 
-### 2.1.1 Agent Skills
+### 2.1.1 PATH Tool registrations
+
+External command support is opt-in and stores command names, never directories or arbitrary shell text. `cj tools register <command>` resolves the name using the current process PATH, collects bounded `--help`/`-h` documentation, and asks the active Profile to map documented leaf capabilities to structured Tool schemas. A registration follows PATH at each task boundary; a changed entry path, symlink target, executable, or companion documentation invalidates its cached review before it can execute.
+
+Only POSIX executable files and Windows `.exe`/`.com` executables are supported. Shell aliases, functions, builtins, path values, command arguments, and Windows `.cmd`/`.bat` wrappers are excluded. External capabilities run a reviewed absolute executable path with fixed subcommands and validated argv. They always retain high risk, confirmation, cancellation, output limits, redaction, audit, and pre-execution fingerprint validation.
+
+### 2.1.2 Agent Skills
 
 Skills are local, standard `SKILL.md` instruction packages rather than executable Tool plugins. CJ discovers user Skills at `$CJ_CONFIG_DIR/skills/<name>/SKILL.md`; a workspace may supply `.agents/skills/<name>/SKILL.md` only after `cj skills trust` records a content fingerprint. A trusted workspace package overrides a same-named user package, while any package file change revokes that workspace trust until it is renewed.
 

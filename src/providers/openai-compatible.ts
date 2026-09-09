@@ -4,7 +4,8 @@ import type {
   AgentMessage,
   ModelProvider,
   ModelRequest,
-  ModelResponse
+  ModelResponse,
+  ModelUsage
 } from "./types.js";
 
 export interface OpenAICompatibleOptions {
@@ -40,6 +41,31 @@ function toOpenAIMessages(messages: AgentMessage[]): OpenAI.Chat.Completions.Cha
   });
 }
 
+function optionalTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeUsage(raw: OpenAI.Completions.CompletionUsage): ModelUsage {
+  const extended = raw as OpenAI.Completions.CompletionUsage & {
+    prompt_cache_hit_tokens?: unknown;
+    prompt_cache_miss_tokens?: unknown;
+    completion_tokens_details?: { reasoning_tokens?: unknown };
+  };
+  const cachedInputTokens = optionalTokenCount(extended.prompt_cache_hit_tokens)
+    ?? optionalTokenCount(raw.prompt_tokens_details?.cached_tokens);
+  const uncachedInputTokens = optionalTokenCount(extended.prompt_cache_miss_tokens)
+    ?? (cachedInputTokens === undefined ? undefined : Math.max(0, raw.prompt_tokens - cachedInputTokens));
+  const reasoningTokens = optionalTokenCount(extended.completion_tokens_details?.reasoning_tokens);
+  return {
+    inputTokens: raw.prompt_tokens,
+    outputTokens: raw.completion_tokens,
+    totalTokens: raw.total_tokens,
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(uncachedInputTokens === undefined ? {} : { uncachedInputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens })
+  };
+}
+
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly id: string;
   private readonly client: OpenAI;
@@ -60,6 +86,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
             ? { tools: request.tools, tool_choice: request.toolChoice }
             : {}),
           stream: true,
+          stream_options: { include_usage: true },
           ...this.extraBody
         } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
       const stream = await this.client.chat.completions.create(
@@ -70,7 +97,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
       let reasoning = "";
       const calls = new Map<number, { id: string; name: string; arguments: string }>();
       let streamed = false;
+      let usage: ModelUsage | undefined;
       for await (const chunk of stream) {
+        if (chunk.usage) {
+          usage = normalizeUsage(chunk.usage);
+          await request.onUsage?.(usage);
+        }
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
         const reasoningContent = (delta as typeof delta & { reasoning_content?: unknown }).reasoning_content;
@@ -102,6 +134,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         return {
           kind: "tool_calls",
           ...(reasoning ? { reasoning } : {}),
+          ...(usage ? { usage } : {}),
           calls: normalized,
           ...(content ? { content } : {})
         };
@@ -109,7 +142,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       if (!content) {
         throw new CjError("MODEL_RESPONSE_INVALID", "Provider returned neither text nor Tool calls");
       }
-      return { kind: "message", content, streamed, ...(reasoning ? { reasoning } : {}) };
+      return { kind: "message", content, streamed, ...(reasoning ? { reasoning } : {}), ...(usage ? { usage } : {}) };
     } catch (error) {
       if (error instanceof CjError) throw error;
       if (signal.aborted) throw new CjError("ABORTED", "Task aborted", { cause: error });

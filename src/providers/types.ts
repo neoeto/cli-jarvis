@@ -24,9 +24,23 @@ export interface ModelRequest {
   tools: ModelToolDefinition[];
   toolChoice: "auto" | "none" | "required";
   onTextDelta?: (delta: string) => void | Promise<void>;
+  /** Receives provider-reported cumulative usage snapshots for this request. */
+  onUsage?: (usage: ModelUsage) => void | Promise<void>;
 }
 
-export type ModelResponse = { reasoning?: string } & (
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** Input tokens served from a provider context cache. Subset of inputTokens. */
+  cachedInputTokens?: number;
+  /** Input tokens not served from cache. Subset of inputTokens. */
+  uncachedInputTokens?: number;
+  /** Reasoning tokens reported by the provider. Subset of outputTokens. */
+  reasoningTokens?: number;
+}
+
+export type ModelResponse = { reasoning?: string; usage?: ModelUsage } & (
   | { kind: "message"; content: string; streamed?: boolean }
   | { kind: "tool_calls"; calls: ToolCall[]; content?: string }
 );

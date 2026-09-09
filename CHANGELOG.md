@@ -2,6 +2,7 @@
 
 ## 1.0.0
 
+- Replaced external CLI directory scanning with explicit PATH command registrations, immediate documentation review, PATH-change invalidation, and TUI management.
 - Added the opt-in `search_web` built-in Tool backed by Tavily, with delayed credential resolution, bounded result snippets, and confirmation for every external query.
 - Added interactive task controls, bounded model/tool execution, lifecycle audit events, previews, and recoverability hints.
 - Added named OpenAI-compatible provider profiles and safe v1 configuration migration.

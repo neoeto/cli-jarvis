@@ -21,18 +21,28 @@ describe("DeepSeek provider", () => {
   it("sends non-thinking Chat Completions requests and normalizes Tool calls", async () => {
     let requestBody: Record<string, unknown> | undefined;
     let authorization: string | undefined;
+    const usageSnapshots: number[] = [];
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
       authorization = request.headers.authorization;
       response.writeHead(200, { "content-type": "text/event-stream" });
+      const usage = {
+        prompt_tokens: 11,
+        completion_tokens: 7,
+        total_tokens: 18,
+        prompt_cache_hit_tokens: 6,
+        prompt_cache_miss_tokens: 5,
+        completion_tokens_details: { reasoning_tokens: 3 }
+      };
       response.end(
         `data: ${JSON.stringify({
           id: "chatcmpl-test",
           object: "chat.completion.chunk",
           created: 1,
           model: "deepseek-v4-flash",
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           choices: [
             {
               index: 0,
@@ -50,7 +60,7 @@ describe("DeepSeek provider", () => {
               }
             }
           ]
-        })}\n\ndata: [DONE]\n\n`
+        })}\n\ndata: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "deepseek-v4-flash", choices: [], usage })}\n\ndata: [DONE]\n\n`
       );
     });
     servers.push(server);
@@ -81,7 +91,8 @@ describe("DeepSeek provider", () => {
             }
           }
         ],
-        toolChoice: "auto"
+        toolChoice: "auto",
+        onUsage: (usage) => { usageSnapshots.push(usage.totalTokens); }
       },
       new AbortController().signal
     );
@@ -91,12 +102,22 @@ describe("DeepSeek provider", () => {
       model: "deepseek-v4-flash",
       thinking: { type: "disabled" },
       tool_choice: "auto",
-      stream: true
+      stream: true,
+      stream_options: { include_usage: true }
     });
     expect(result).toEqual({
       kind: "tool_calls",
-      calls: [{ id: "call-1", name: "list_files", arguments: '{"path":"."}' }]
+      calls: [{ id: "call-1", name: "list_files", arguments: '{"path":"."}' }],
+      usage: {
+        inputTokens: 11,
+        outputTokens: 7,
+        totalTokens: 18,
+        cachedInputTokens: 6,
+        uncachedInputTokens: 5,
+        reasoningTokens: 3
+      }
     });
+    expect(usageSnapshots).toEqual([2, 18]);
   });
 
   it.each([undefined, "Consider the request first."])("keeps reasoning %s separate from streamed answer text", async (reasoning) => {

@@ -33,6 +33,7 @@ describe("shell completion", () => {
     const store = new ConfigStore(getAppPaths({ CJ_CONFIG_DIR: root }));
     await store.saveConfig({
       ...defaultConfig,
+      externalCli: { commands: ["greet", "kubectl"] },
       profiles: {
         ...defaultConfig.profiles,
         work: defaultConfig.profiles.default
@@ -40,7 +41,9 @@ describe("shell completion", () => {
     });
     const program = new Command().name("cj").option("--profile <name>");
     program.command("chat").description("chat");
-    program.command("tools").command("show <name>").description("show");
+    const tools = program.command("tools");
+    tools.command("show <name>").description("show");
+    tools.command("unregister <command>").description("unregister");
     addCompletionCommand(program, store, new ToolRegistry());
     const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
@@ -50,6 +53,8 @@ describe("shell completion", () => {
     expect(output).toHaveBeenLastCalledWith("default\nwork\n");
     await program.parseAsync(["__complete", "bash", "--", "cj", "--profile=wo"], { from: "user" });
     expect(output).toHaveBeenLastCalledWith("--profile=work\n");
+    await program.parseAsync(["__complete", "bash", "--", "cj", "tools", "unregister", "k"], { from: "user" });
+    expect(output).toHaveBeenLastCalledWith("kubectl\n");
     await program.parseAsync(["__complete", "bash", "--", "cj", ""], { from: "user" });
     expect(output.mock.lastCall?.[0]).toContain("--help\n");
   });

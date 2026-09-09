@@ -105,7 +105,7 @@ describe("ConfigStore", () => {
       limits: { maxToolCalls: 5, taskTimeoutMs: 60_000 }
     }));
     const migrated = await store.loadConfig();
-    expect(migrated).toMatchObject({ version: 2, activeProfile: "default", provider: { id: "legacy", kind: "openai-compatible" } });
+    expect(migrated).toMatchObject({ version: 3, activeProfile: "default", provider: { id: "legacy", kind: "openai-compatible" } });
     expect(migrated.profiles.default?.limits.modelTimeoutMs).toBe(60_000);
   });
 
@@ -114,6 +114,24 @@ describe("ConfigStore", () => {
     const { webSearch: _webSearch, ...preWebSearchConfig } = defaultConfig;
     await mkdir(path.dirname(store.paths.configFile), { recursive: true });
     await writeFile(store.paths.configFile, JSON.stringify(preWebSearchConfig));
-    await expect(store.loadConfig()).resolves.toMatchObject({ version: 2, webSearch: { enabled: false } });
+    await expect(store.loadConfig()).resolves.toMatchObject({ version: 3, webSearch: { enabled: false } });
+  });
+
+  it("migrates v2 settings while discarding directory-based external CLI registrations", async () => {
+    const store = await temporaryStore();
+    const { externalCli: _externalCli, ...withoutExternalCli } = defaultConfig;
+    const previous = {
+      ...withoutExternalCli,
+      version: 2,
+      externalCli: { directories: ["/tmp/old-cli-directory"] }
+    };
+    await mkdir(path.dirname(store.paths.configFile), { recursive: true });
+    await writeFile(store.paths.configFile, JSON.stringify(previous));
+    await expect(store.loadConfig()).resolves.toMatchObject({
+      version: 3,
+      externalCli: { commands: [] },
+      provider: defaultConfig.provider,
+      language: defaultConfig.language
+    });
   });
 });

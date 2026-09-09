@@ -47,7 +47,8 @@ interface Confirmation {
 export interface ConfigTuiAppProps {
   initial: ConfigDraft;
   onApply: (draft: ConfigDraft) => Promise<void>;
-  validateExternalDirectory: (value: string) => Promise<string>;
+  validateExternalCommand: (value: string) => Promise<{ command: string; entry: string }>;
+  externalEntries: Readonly<Record<string, string>>;
 }
 
 const sections: Array<{ id: Section; zh: string; en: string }> = [
@@ -56,7 +57,7 @@ const sections: Array<{ id: Section; zh: string; en: string }> = [
   { id: "web-search", zh: "网络搜索", en: "Web search" },
   { id: "runtime", zh: "运行与界面", en: "Runtime & UI" },
   { id: "security", zh: "安全", en: "Security" },
-  { id: "external", zh: "外部 CLI", en: "External CLI" },
+  { id: "external", zh: "PATH 工具", en: "PATH tools" },
   { id: "extensions", zh: "扩展", en: "Extensions" },
   { id: "memory", zh: "记忆", en: "Memory" },
   { id: "skills", zh: "Skills 信任", en: "Skills trust" }
@@ -84,7 +85,7 @@ function masked(value: string, secret: boolean | undefined): string {
   return secret ? "•".repeat(Math.min(Math.max(value.length, 8), 32)) : value;
 }
 
-export function ConfigTuiApp({ initial, onApply, validateExternalDirectory }: ConfigTuiAppProps): React.JSX.Element {
+export function ConfigTuiApp({ initial, onApply, validateExternalCommand, externalEntries }: ConfigTuiAppProps): React.JSX.Element {
   const { exit } = useApp();
   const [baseline, setBaseline] = useState(initial);
   const [draft, setDraft] = useState(initial);
@@ -98,6 +99,7 @@ export function ConfigTuiApp({ initial, onApply, validateExternalDirectory }: Co
   const [exiting, setExiting] = useState(false);
   const [status, setStatus] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [externalPaths, setExternalPaths] = useState<Record<string, string>>({ ...externalEntries });
   const language = draft.config.language;
   const section = sections[sectionIndex]?.id ?? "profiles";
   const changed = draftChanged(baseline, draft);
@@ -249,16 +251,21 @@ export function ConfigTuiApp({ initial, onApply, validateExternalDirectory }: Co
     ];
 
     if (section === "external") return [
-      ...draft.config.externalCli.directories.map((directory, index) => ({
-        label: directory,
-        value: tr("已配置", "configured"),
+      ...draft.config.externalCli.commands.map((externalCommand, index) => ({
+        label: externalCommand,
+        value: externalPaths[externalCommand] || tr("当前 PATH 中不可用", "unavailable on current PATH"),
+        hint: tr("保存后立即采集帮助并审核", "Help collection and review run immediately after saving"),
         remove: () => openConfirm({
-          title: tr("移除外部 CLI 目录", "Remove external CLI directory"),
-          body: directory,
-          accept: () => setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { directories: removeAt(current.config.externalCli.directories, index) } } }))
+          title: tr("移除 PATH 工具注册", "Remove PATH tool registration"),
+          body: externalCommand,
+          accept: () => setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { commands: removeAt(current.config.externalCli.commands, index) } } }))
         })
       })),
-      { label: tr("新增外部 CLI 目录", "Add external CLI directory"), value: "+", activate: () => openEditor({ title: tr("现有目录绝对路径", "Existing directory path"), value: "", submit: async (value) => { const directory = await validateExternalDirectory(value); setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { directories: addUnique(current.config.externalCli.directories, directory) } } })); } }) }
+      { label: tr("注册 PATH 工具", "Register PATH tool"), value: "+", activate: () => openEditor({ title: tr("PATH 中的命令名", "Command name on PATH"), value: "", submit: async (value) => {
+        const resolved = await validateExternalCommand(value);
+        setExternalPaths((current) => ({ ...current, [resolved.command]: resolved.entry }));
+        setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { commands: addUnique(current.config.externalCli.commands, resolved.command) } } }));
+      } }) }
     ];
 
     if (section === "extensions") return [
@@ -293,7 +300,7 @@ export function ConfigTuiApp({ initial, onApply, validateExternalDirectory }: Co
       })),
       { label: tr("提示", "Hint"), value: "cj skills trust", hint: tr("使用现有命令信任当前工作区 Skills", "Use the existing command to trust current workspace Skills") }
     ];
-  }, [draft, language, section, tr, validateExternalDirectory]);
+  }, [draft, externalPaths, language, section, tr, validateExternalCommand]);
 
   const selectedRow = rows[Math.min(rowIndex, Math.max(0, rows.length - 1))];
 

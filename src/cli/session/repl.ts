@@ -1,5 +1,7 @@
 import { asCjError, CjError } from "../../shared/errors.js";
-import type { TaskHistorySummary } from "../../audit/store.js";
+import type { HistorySummary, TaskHistorySummary } from "../../audit/store.js";
+import type { UsageSummary } from "../../providers/usage.js";
+import { formatUsage } from "../../providers/usage.js";
 import type { SessionInput } from "./input.js";
 import { parseSessionInput, type SessionCommand } from "./commands.js";
 
@@ -11,6 +13,7 @@ export interface ChatStatus {
   provider: string;
   model: string;
   workspaceRoot: string;
+  usage?: UsageSummary;
 }
 
 export interface SessionHandlers {
@@ -41,6 +44,7 @@ function formatStatus(status: ChatStatus, language: "zh-CN" | "en"): string {
       ...(status.sessionId ? [`  会话 ID: ${status.sessionId}`] : []),
       `  已完成轮次: ${status.turns}`,
       `  当前上下文消息: ${status.contextMessages}`,
+      ...(status.usage ? [`  Token 用量: ${formatUsage(status.usage, language)}`] : []),
       `  Provider: ${status.provider}`,
       `  模型: ${status.model}`,
       `  工作区: ${status.workspaceRoot}`
@@ -52,6 +56,7 @@ function formatStatus(status: ChatStatus, language: "zh-CN" | "en"): string {
     ...(status.sessionId ? [`  Session ID: ${status.sessionId}`] : []),
     `  Completed turns: ${status.turns}`,
     `  Context messages: ${status.contextMessages}`,
+    ...(status.usage ? [`  Token usage: ${formatUsage(status.usage, language)}`] : []),
     `  Provider: ${status.provider}`,
     `  Model: ${status.model}`,
     `  Workspace: ${status.workspaceRoot}`
@@ -203,6 +208,24 @@ export function formatTaskHistory(
     const status = language === "zh-CN"
       ? summary.status === "completed" ? "完成" : summary.status === "failed" ? "失败" : summary.status === "cancelled" ? "已取消" : "未完成"
       : summary.status;
-    return `${summary.startedAt}  ${summary.taskId.slice(0, 8)}${session}  ${status}  tools:${summary.toolCalls}  events:${summary.eventCount}  ${duration}${summary.errorCode ? `  ${summary.errorCode}` : ""}`;
+    const title = summary.title ?? (language === "zh-CN" ? "旧记录，无介绍" : "Legacy record, no description");
+    return `${summary.startedAt}  task:${summary.taskId.slice(0, 8)}${session}  ${status}  ${formatUsage(summary, language)}  tools:${summary.toolCalls}  ${duration}  ${title}${summary.errorCode ? `  ${summary.errorCode}` : ""}`;
+  }).join("\n");
+}
+
+export function formatGroupedHistory(summaries: HistorySummary[], language: "zh-CN" | "en"): string {
+  if (summaries.length === 0) return language === "zh-CN" ? "暂无历史记录。" : "No history.";
+  return summaries.map((summary) => {
+    const status = language === "zh-CN"
+      ? summary.status === "completed" ? "完成" : summary.status === "failed" ? "失败" : summary.status === "cancelled" ? "已取消" : "未完成"
+      : summary.status;
+    const title = summary.title ?? (language === "zh-CN" ? "旧记录，无介绍" : "Legacy record, no description");
+    if (summary.kind === "task") {
+      return `${summary.lastActiveAt}  task:${summary.taskId.slice(0, 8)}  ${status}  ${formatUsage(summary, language)}  tools:${summary.toolCalls}  ${title}`;
+    }
+    const failures = summary.failedTurns || summary.cancelledTurns
+      ? `  failed:${summary.failedTurns} cancelled:${summary.cancelledTurns}`
+      : "";
+    return `${summary.lastActiveAt}  chat:${summary.sessionId.slice(0, 8)}  ${status}  turns:${summary.turns}${failures}  ${formatUsage(summary, language)}  tools:${summary.toolCalls}  ${title}`;
   }).join("\n");
 }

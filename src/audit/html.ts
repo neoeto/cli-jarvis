@@ -1,4 +1,5 @@
 import type { AuditRecord, TaskHistorySummary } from "./store.js";
+import { formatUsage, mergeUsageSummaries, type UsageSummary } from "../providers/usage.js";
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => ({
@@ -34,6 +35,20 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
+function formatTokenUsage(summary: Pick<TaskHistorySummary, "usage" | "usageRequests" | "unknownUsageRequests" | "cacheReportedRequests" | "reasoningReportedRequests">): string {
+  return formatUsage(summary, "zh-CN");
+}
+
+function taskUsageSummary(summary: TaskHistorySummary): UsageSummary {
+  return {
+    ...(summary.usage ? { usage: summary.usage } : {}),
+    requests: summary.usageRequests,
+    unknownRequests: summary.unknownUsageRequests,
+    cacheReportedRequests: summary.cacheReportedRequests,
+    reasoningReportedRequests: summary.reasoningReportedRequests
+  };
+}
+
 function statusLabel(status: TaskHistorySummary["status"]): string {
   return {
     completed: "已完成",
@@ -63,7 +78,10 @@ function eventLabel(event: string): string {
     assistant_progress: "助手决策",
     reasoning: "模型思考",
     status: "状态",
-    memory_used: "使用记忆"
+    memory_used: "使用记忆",
+    task_title: "任务标题",
+    model_usage: "模型用量",
+    usage_summary: "用量汇总"
   }[event] ?? event;
 }
 
@@ -111,7 +129,9 @@ function taskDetails(records: AuditRecord[], summaries: TaskHistorySummary[]): s
     const session = summary?.sessionId
       ? `<span><small>会话</small><code>${escapeHtml(summary.sessionId)}</code></span>`
       : "<span><small>会话</small><b>单次任务</b></span>";
-    return `<details class="task-detail"><summary class="task-summary"><span class="task-primary"><code>${escapeHtml(taskId)}</code><span class="status status-${status}">${statusLabel(status)}</span></span><span class="task-secondary"><span><small>开始</small><time datetime="${escapeHtml(summary?.startedAt ?? taskRecords[0]?.timestamp ?? "")}">${escapeHtml(formatTimestamp(summary?.startedAt ?? taskRecords[0]?.timestamp ?? ""))}</time></span>${session}<span><small>事件</small><b>${formatNumber(summary?.eventCount ?? taskRecords.length)}</b></span><span><small>耗时</small><b>${formatDuration(summary?.durationMs)}</b></span></span></summary><div class="detail-body"><div class="detail-intro"><p>已折叠连续的助手流式输出。以下内容仅包含已脱敏的审计元数据。</p></div><div class="table-scroll"><table class="events"><caption class="sr-only">${escapeHtml(taskId)} 的事件明细</caption><thead><tr><th scope="col">时间</th><th scope="col">事件</th><th scope="col">脱敏数据</th></tr></thead><tbody>${eventRows}</tbody></table></div></div></details>`;
+    const title = summary?.title ?? "旧记录，无介绍";
+    const tokens = summary ? formatTokenUsage(summary) : "未知";
+    return `<details class="task-detail"><summary class="task-summary"><span class="task-primary"><span><small>任务</small><code>${escapeHtml(taskId)}</code><small>${escapeHtml(title)}</small></span><span class="status status-${status}">${statusLabel(status)}</span></span><span class="task-secondary"><span><small>开始</small><time datetime="${escapeHtml(summary?.startedAt ?? taskRecords[0]?.timestamp ?? "")}">${escapeHtml(formatTimestamp(summary?.startedAt ?? taskRecords[0]?.timestamp ?? ""))}</time></span>${session}<span><small>Token</small><b>${escapeHtml(tokens)}</b></span><span><small>耗时</small><b>${formatDuration(summary?.durationMs)}</b></span></span></summary><div class="detail-body"><div class="detail-intro"><p>已折叠连续的助手流式输出。以下内容仅包含已脱敏的审计元数据。</p></div><div class="table-scroll"><table class="events"><caption class="sr-only">${escapeHtml(taskId)} 的事件明细</caption><thead><tr><th scope="col">时间</th><th scope="col">事件</th><th scope="col">脱敏数据</th></tr></thead><tbody>${eventRows}</tbody></table></div></div></details>`;
   }).join("\n");
 }
 
@@ -129,11 +149,33 @@ export function renderAuditHtml(
 ): string {
   const completed = summaries.filter((summary) => summary.status === "completed").length;
   const attentionRequired = summaries.length - completed;
+  const knownTokens = summaries.reduce((total, summary) => total + (summary.usage?.totalTokens ?? 0), 0);
+  const hasKnownUsage = summaries.some((summary) => summary.usage !== undefined);
+  const usageRequests = summaries.reduce((total, summary) => total + summary.usageRequests, 0);
+  const unknownUsageRequests = summaries.reduce((total, summary) => total + summary.unknownUsageRequests, 0);
+  const sessions = new Map<string, TaskHistorySummary[]>();
+  for (const summary of summaries) {
+    if (!summary.sessionId) continue;
+    const turns = sessions.get(summary.sessionId) ?? [];
+    turns.push(summary);
+    sessions.set(summary.sessionId, turns);
+  }
+  const sessionRows = [...sessions.entries()].map(([sessionId, turns]) => {
+    const sorted = [...turns].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const usage = sorted.reduce<UsageSummary>(
+      (value, turn) => mergeUsageSummaries(value, taskUsageSummary(turn)),
+      { requests: 0, unknownRequests: 0, cacheReportedRequests: 0, reasoningReportedRequests: 0 }
+    );
+    const latest = sorted.at(-1)!;
+    const failed = sorted.filter((turn) => turn.status === "failed").length;
+    const cancelled = sorted.filter((turn) => turn.status === "cancelled").length;
+    return `<tr><td><code>${escapeHtml(sessionId)}</code></td><td>${escapeHtml(sorted[0]?.title ?? "旧记录，无介绍")}</td><td>${formatNumber(sorted.length)}</td><td><span class="status status-${latest.status}">${statusLabel(latest.status)}</span></td><td>失败 ${formatNumber(failed)} / 取消 ${formatNumber(cancelled)}</td><td>${escapeHtml(formatUsage(usage, "zh-CN"))}</td></tr>`;
+  }).join("\n") || "<tr><td class=\"empty-row\" colspan=\"6\">没有 chat 会话。</td></tr>";
   const taskRows = summaries.map((summary) => {
     const session = summary.sessionId ? `<code>${escapeHtml(summary.sessionId)}</code>` : "单次任务";
     const error = summary.errorCode ? `<code>${escapeHtml(summary.errorCode)}</code>` : "无";
-    return `<tr><td><time datetime="${escapeHtml(summary.startedAt)}">${escapeHtml(formatTimestamp(summary.startedAt))}</time></td><td><code>${escapeHtml(summary.taskId)}</code></td><td>${session}</td><td><span class="status status-${summary.status}">${statusLabel(summary.status)}</span></td><td>${formatNumber(summary.toolCalls)}</td><td>${formatNumber(summary.eventCount)}</td><td>${formatDuration(summary.durationMs)}</td><td>${error}</td></tr>`;
-  }).join("\n") || "<tr><td class=\"empty-row\" colspan=\"8\">没有可导出的审计任务。</td></tr>";
+    return `<tr><td><time datetime="${escapeHtml(summary.startedAt)}">${escapeHtml(formatTimestamp(summary.startedAt))}</time></td><td>${escapeHtml(summary.title ?? "旧记录，无介绍")}</td><td><code>${escapeHtml(summary.taskId)}</code></td><td>${session}</td><td><span class="status status-${summary.status}">${statusLabel(summary.status)}</span></td><td>${escapeHtml(formatTokenUsage(summary))}</td><td>${formatNumber(summary.toolCalls)}</td><td>${formatDuration(summary.durationMs)}</td><td>${error}</td></tr>`;
+  }).join("\n") || "<tr><td class=\"empty-row\" colspan=\"9\">没有可导出的审计任务。</td></tr>";
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "本地时区";
 
   return `<!doctype html>
@@ -284,14 +326,19 @@ export function renderAuditHtml(
 
   <section class="overview" aria-label="导出概览">
     <div class="metric accent"><small>任务</small><strong>${formatNumber(summaries.length)}</strong></div>
-    <div class="metric"><small>审计事件</small><strong>${formatNumber(records.length)}</strong></div>
+    <div class="metric"><small>Token${unknownUsageRequests ? "（不完整）" : ""}</small><strong>${hasKnownUsage ? formatNumber(knownTokens) : "未知"}</strong></div>
     <div class="metric"><small>已完成</small><strong>${formatNumber(completed)}</strong></div>
     <div class="metric attention"><small>需关注</small><strong>${formatNumber(attentionRequired)}</strong></div>
   </section>
 
+  <section aria-labelledby="session-heading">
+    <div class="section-heading"><h2 id="session-heading">Chat 会话摘要</h2><p>Token 为会话内所有轮次的累计；缺失请求不会按零计算。</p></div>
+    <div class="table-scroll"><table><caption class="sr-only">Chat 会话摘要</caption><thead><tr><th scope="col">会话 ID</th><th scope="col">介绍</th><th scope="col">轮次</th><th scope="col">最近状态</th><th scope="col">异常轮次</th><th scope="col">Token 用量</th></tr></thead><tbody>${sessionRows}</tbody></table></div>
+  </section>
+
   <section aria-labelledby="summary-heading">
-    <div class="section-heading"><h2 id="summary-heading">任务摘要</h2><p>第二列为任务 ID。会话 ID 仅在 chat 任务中出现。</p></div>
-    <div class="table-scroll"><table><caption class="sr-only">任务摘要</caption><thead><tr><th scope="col">开始时间</th><th scope="col">任务 ID</th><th scope="col">会话</th><th scope="col">状态</th><th scope="col">工具</th><th scope="col">事件</th><th scope="col">耗时</th><th scope="col">错误</th></tr></thead><tbody>${taskRows}</tbody></table></div>
+    <div class="section-heading"><h2 id="summary-heading">任务摘要</h2><p>每一行对应单次 task 或 chat 中的一轮。会话 ID 仅在 chat 中出现。</p></div>
+    <div class="table-scroll"><table><caption class="sr-only">任务摘要</caption><thead><tr><th scope="col">开始时间</th><th scope="col">介绍</th><th scope="col">任务 ID</th><th scope="col">会话</th><th scope="col">状态</th><th scope="col">Token 用量</th><th scope="col">工具</th><th scope="col">耗时</th><th scope="col">错误</th></tr></thead><tbody>${taskRows}</tbody></table></div>
   </section>
 
   <section aria-labelledby="details-heading">
@@ -299,7 +346,7 @@ export function renderAuditHtml(
     ${taskDetails(records, summaries) || "<p class=\"empty-row\">没有可导出的审计事件。</p>"}
   </section>
 
-  <footer class="report-footer"><p>此页面由 cj 在本机生成，只包含已脱敏的审计元数据。</p></footer>
+  <footer class="report-footer"><p>此页面由 cj 在本机生成，只包含已脱敏的审计元数据。用量来自供应商响应；${usageRequests ? `${unknownUsageRequests}/${usageRequests} 个模型请求未返回用量。` : "这些旧记录不含逐请求用量。"}</p></footer>
 </main>
 </body>
 </html>`;

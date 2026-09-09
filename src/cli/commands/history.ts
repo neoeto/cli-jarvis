@@ -1,23 +1,33 @@
 import type { Command } from "commander";
 import type { AuditStore } from "../../audit/store.js";
-import type { AuditRecord, TaskHistorySummary } from "../../audit/store.js";
+import type { AuditRecord, HistorySummary, TaskHistorySummary } from "../../audit/store.js";
 import { CjError } from "../../shared/errors.js";
 import { confirm } from "@inquirer/prompts";
 import path from "node:path";
+import { formatUsage } from "../../providers/usage.js";
 
 export function addHistoryCommand(program: Command, audit: AuditStore): void {
   const history = program
     .command("history")
     .description("Show local redacted audit history")
-    .option("-n, --limit <number>", "maximum tasks (or events with --events)", "50")
+    .option("-n, --limit <number>", "maximum history entries (or events with --events)", "50")
     .option("--events", "show raw event records instead of one summary per task")
-    .action(async (options: { limit: string; events?: boolean }, command: Command) => {
+    .option("--tasks", "show each task/turn instead of grouping chat sessions")
+    .option("--session <session-id>", "show task turns for one chat session by ID or prefix")
+    .action(async (options: { limit: string; events?: boolean; tasks?: boolean; session?: string }, command: Command) => {
       const limit = Number.parseInt(options.limit, 10);
       if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
         throw new CjError("CONFIG_INVALID", "limit must be between 1 and 1000");
       }
+      const json = command.optsWithGlobals().json === true;
+      if (options.events && (options.tasks || options.session)) {
+        throw new CjError("CONFIG_INVALID", "--events cannot be combined with --tasks or --session");
+      }
+      if (json && (options.tasks || options.session)) {
+        throw new CjError("CONFIG_INVALID", "--json emits raw events and cannot be combined with --tasks or --session");
+      }
       const records = await audit.list(limit);
-      if (command.optsWithGlobals().json === true) {
+      if (json) {
         for (const record of records) process.stdout.write(`${JSON.stringify(record)}\n`);
         return;
       }
@@ -25,12 +35,17 @@ export function addHistoryCommand(program: Command, audit: AuditStore): void {
         printEvents(records);
         return;
       }
-      const summaries = await audit.listTaskSummaries(limit);
+      const summaries = options.session
+        ? audit.summarizeRecords((await audit.recordsForSession(options.session)).records, limit)
+        : options.tasks
+          ? await audit.listTaskSummaries(limit)
+          : await audit.listHistorySummaries(limit);
       if (summaries.length === 0) {
         process.stdout.write("No history.\n");
         return;
       }
-      printSummaries(summaries);
+      if (options.session || options.tasks) printSummaries((summaries as TaskHistorySummary[]).reverse());
+      else printHistorySummaries(summaries as HistorySummary[]);
     });
 
   history
@@ -82,8 +97,22 @@ export function printSummaries(summaries: TaskHistorySummary[]): void {
     const session = summary.sessionId ? `  session:${summary.sessionId.slice(0, 8)}` : "";
     const error = summary.errorCode ? `  ${summary.errorCode}` : "";
     process.stdout.write(
-      `${summary.startedAt}  ${summary.taskId.slice(0, 8)}${session}  ${summary.status}  tools:${summary.toolCalls}  events:${summary.eventCount}  ${formatDuration(summary.durationMs)}${error}\n`
+      `${summary.startedAt}  task:${summary.taskId.slice(0, 8)}${session}  ${summary.status}  ${formatUsage(summary)}  tools:${summary.toolCalls}  ${formatDuration(summary.durationMs)}  ${summary.title ?? "Legacy record, no description"}${error}\n`
     );
+  }
+}
+
+export function printHistorySummaries(summaries: HistorySummary[]): void {
+  for (const summary of summaries) {
+    const title = summary.title ?? "Legacy record, no description";
+    if (summary.kind === "task") {
+      process.stdout.write(`${summary.lastActiveAt}  task:${summary.taskId.slice(0, 8)}  ${summary.status}  ${formatUsage(summary)}  tools:${summary.toolCalls}  ${title}\n`);
+      continue;
+    }
+    const failures = summary.failedTurns || summary.cancelledTurns
+      ? `  failed:${summary.failedTurns} cancelled:${summary.cancelledTurns}`
+      : "";
+    process.stdout.write(`${summary.lastActiveAt}  chat:${summary.sessionId.slice(0, 8)}  ${summary.status}  turns:${summary.turns}${failures}  ${formatUsage(summary)}  tools:${summary.toolCalls}  ${title}\n`);
   }
 }
 

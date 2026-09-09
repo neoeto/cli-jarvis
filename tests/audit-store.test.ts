@@ -148,6 +148,32 @@ describe("AuditStore", () => {
     ]);
   });
 
+  it("aggregates request usage and groups chat turns under the first title", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const sessionId = "session-grouped";
+    const first = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "first" }), sessionId };
+    const second = { ...store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "second" }), sessionId };
+    await store.taskStarted(first);
+    await store.agentEvent(first.taskId, { type: "task_title", title: "First topic", generated: true });
+    await store.agentEvent(first.taskId, { type: "model_usage", requestId: "one", model: "fake", purpose: "title", success: true, usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5, cachedInputTokens: 3, uncachedInputTokens: 1, reasoningTokens: 1 } });
+    await store.taskFinished(first.taskId, true);
+    await store.taskStarted(second);
+    await store.agentEvent(second.taskId, { type: "task_title", title: "Later turn", generated: true });
+    await store.agentEvent(second.taskId, { type: "model_usage", requestId: "two", model: "fake", purpose: "agent", success: false });
+    await store.agentEvent(second.taskId, { type: "model_usage", requestId: "three", model: "fake", purpose: "agent", success: true, usage: { inputTokens: 6, outputTokens: 2, totalTokens: 8 } });
+    await store.taskFinished(second.taskId, false, "ABORTED");
+
+    expect(await store.listHistorySummaries()).toEqual([
+      expect.objectContaining({
+        kind: "chat", sessionId, title: "First topic", turns: 2, cancelledTurns: 1,
+        usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13, cachedInputTokens: 3, uncachedInputTokens: 1, reasoningTokens: 1 },
+        usageRequests: 3, unknownUsageRequests: 1, cacheReportedRequests: 1, reasoningReportedRequests: 1
+      })
+    ]);
+  });
+
   it("exports an escaped standalone HTML report", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
     created.push(root);
@@ -164,6 +190,7 @@ describe("AuditStore", () => {
     const html = await readFile(output, "utf8");
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("任务摘要");
+    expect(html).toContain("Chat 会话摘要");
     expect(html).toContain(context.taskId);
     expect(html).toContain("合并 2 个片段");
     expect(html).toContain("&lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt;");

@@ -34,7 +34,7 @@ The default provider is DeepSeek `deepseek-v4-flash` in non-thinking mode. Non-s
 
 `cj doctor --offline` validates local configuration without making a model request. Use `--profile <name>` for a one-off profile selection; no API key can be supplied on the command line.
 
-`cj config tui` opens a full-screen keyboard settings interface in an 80×24-or-larger TTY. It manages profiles, credentials, language and limits, authorization roots, external CLI directories, local extensions, memory enablement, and existing Skills trust records. Changes stay in memory until `Ctrl+S` applies them; `q` offers to save or discard. API Keys are always masked and never prefilled.
+`cj config tui` opens a full-screen keyboard settings interface in an 80×24-or-larger TTY. It manages profiles, credentials, language and limits, authorization roots, registered PATH tools, local extensions, memory enablement, and existing Skills trust records. Changes stay in memory until `Ctrl+S` applies them; `q` offers to save or discard. API Keys are always masked and never prefilled.
 
 ## Use
 
@@ -47,7 +47,7 @@ cj --dry-run "将旧报告移动到 archive 目录"
 cj chat
 ```
 
-`cj chat` 在 TTY 中启动多轮会话。输入 `/clear` 清空上下文，`/status` 查看会话状态，`/tools` 查看可用工具，`/history` 查看脱敏审计历史，`/last` 查看最近任务，`/retry` 用新的 preview 和确认重新执行最近任务，`/cancel` 提示取消方式，`/exit` 退出。方向键可浏览输入历史；一次粘贴的多行内容会作为一个问题提交。`Ctrl+C` 首次取消当前模型请求或 Tool，再次退出会话。重试与原任务共享 Tool 调用上限，且绝不复用旧确认。
+`cj chat` 在 TTY 中启动多轮会话。输入 `/clear` 清空上下文，`/status` 查看会话状态与累计 Token 用量，`/tools` 查看可用工具，`/history` 查看脱敏审计历史，`/last` 查看最近任务，`/retry` 用新的 preview 和确认重新执行最近任务，`/cancel` 提示取消方式，`/exit` 退出。方向键可浏览输入历史；一次粘贴的多行内容会作为一个问题提交。`Ctrl+C` 首次取消当前模型请求或 Tool，再次退出会话。重试与原任务共享 Tool 调用上限，且绝不复用旧确认。`/clear` 不会重置会话累计用量。
 
 Useful options:
 
@@ -143,6 +143,8 @@ The model is not the security boundary. Tool behavior, path checks, risk escalat
 
 ```bash
 cj history
+cj history --tasks
+cj history --session 1234abcd
 cj history --events --limit 100
 cj history --json --limit 100
 cj history export ./cj-audit.jsonl
@@ -152,9 +154,10 @@ cj history export ./one-chat.html --session 1234abcd
 cj history prune --older-than 90
 ```
 
-History is local JSONL metadata. It does not retain raw prompts, assistant responses, file contents, environment values, or API Keys.
-The default terminal view is one line per task; use `--events` for the underlying event stream. JSONL remains event-level for automation compatibility.
-Exporting to a `.html` filename (or using `--format html`) creates a standalone, human-readable page with task summaries and collapsible redacted event details.
+History is local JSONL metadata. It stores a short, redacted task title and provider-reported Token usage, but does not retain raw prompts, assistant responses, file contents, environment values, or API Keys. Creating the title makes one additional model request per task; failures fall back to a redacted prompt excerpt and do not block the task.
+The default terminal view combines all turns of a chat session into one line while keeping standalone tasks separate. Use `--tasks` for every task/turn, `--session` for one chat's turns, or `--events` for the underlying event stream. JSONL remains event-level for automation compatibility.
+Token totals include title generation, agent requests, and any uncached external CLI review requests. The display breaks input into cache-hit and cache-miss tokens when the provider reports that detail, shows the cache hit rate, and reports reasoning tokens as a subset of output tokens. Input equals cache-hit plus cache-miss for DeepSeek; reasoning is already included in output and is never added to the total again. Missing provider usage or breakdown fields are reported as unknown or partial rather than zero, and SDK/provider retries that are not surfaced separately may not be measurable.
+Exporting to a `.html` filename (or using `--format html`) creates a standalone, human-readable page with chat and task summaries, Token usage, and collapsible redacted event details.
 
 Long-term memory is off by default and separate from audit history. Only facts you explicitly add are stored; file contents, model output, command output, and credentials are never added automatically.
 
@@ -189,7 +192,7 @@ PowerShell:
 cj completion powershell | Out-String | Invoke-Expression
 ```
 
-The generated script delegates candidate lookup to `cj`'s command tree, so it stays aligned with installed commands and options. It also completes configured profile names for `--profile` and registered Tool names after `cj tools show`. Candidate lookup is local and read-only; it does not call the model or execute external CLI business commands. Set `CJ_COMMAND` when the executable is not named `cj`, for example `CJ_COMMAND=/path/to/cj eval "$(/path/to/cj completion bash)"`.
+The generated script delegates candidate lookup to `cj`'s command tree, so it stays aligned with installed commands and options. It also completes configured profile names for `--profile`, registered Tool names after `cj tools show`, and PATH registration names after `cj tools unregister`. Candidate lookup is local and read-only; it does not call the model or execute external CLI business commands. Set `CJ_COMMAND` when the executable is not named `cj`, for example `CJ_COMMAND=/path/to/cj eval "$(/path/to/cj completion bash)"`.
 
 The matching checked-in files are available under `completions/` for shell startup configuration. `cj version --diagnose` shows version, platform, active profile, and protected local-store health without printing credentials.
 
@@ -218,46 +221,30 @@ See [DESIGN.md](./DESIGN.md) for the detailed architecture and accepted product 
 
 See [ROADMAP.md](./ROADMAP.md) for post-MVP feature planning, with improved interactive experience as the first milestone.
 
-## External CLI directories
+## PATH 工具注册
 
-Register existing executables or file symlinks without writing an SDK plugin:
+注册当前终端 PATH 中已有的可执行命令，无需编写 SDK 插件：
 
 ```bash
-mkdir -p "$HOME/my-cli-tools"
-ln -s /absolute/path/to/my-cli "$HOME/my-cli-tools/my-cli"
-cj config cli-dir add "$HOME/my-cli-tools"
-cj config cli-dir list
-cj tools refresh
+cj tools register kubectl
+cj tools registrations
 cj tools list
 cj tools doctor
+cj tools unregister kubectl
 ```
 
-Adding a directory authorizes bounded help probes of its executables and documentation review using the selected model. Only direct files are discovered; subdirectories and system PATH are not scanned. POSIX executable scripts/binaries and Windows native `.exe`/`.com` files are supported. Windows `.cmd`/`.bat` wrappers are reported as unsupported. Duplicate real targets are deduplicated; same-named executables at different paths receive distinct Tool names.
+`register` 仅接受一个命令名，不能传路径、固定参数、Shell alias、函数或内建命令。它会立刻按当前 PATH 顺序解析命令、采集帮助文档并用当前 Profile 审核能力。POSIX 支持有执行权限的脚本与二进制；Windows 支持 `.exe` 和 `.com`，不支持 `.cmd` 或 `.bat` 包装脚本。注册失败前不会写入配置；文档或模型审核失败时会保留注册，以便通过 `cj tools doctor` 检查并在之后重试。
 
-Before each task, chat turn, and retry, `cj` checks for additions, removals and changes. It tries `--help`, then `-h` when needed, and probes subcommands explicitly listed in command sections. Each probe has a 3-second timeout and 64 KiB combined output budget (32 KiB per stream); each CLI has at most 20 probes and a 256 KiB document budget. Help probes run with closed stdin and a minimal environment. They never execute business examples.
+每个任务、聊天回合、重试和 `cj tools refresh` 都会重新解析 PATH。路径顺序、符号链接目标、可执行文件或伴随文档变化都会使旧审核失效；命令暂时不在 PATH 中会显示为 `missing`，恢复后自动重新审核。生成后的 Tool 名以注册命令和子命令为身份，因此命令升级或 PATH 位置改变后保持稳定。
 
-Local checks reject empty, version-only or unreadable help. The current profile's model then reviews whether each capability has a clear purpose, invocation syntax, required arguments, option values and a usable syntax/example. Documentation is redacted before being sent to the provider. Only approved leaf commands with supported, unambiguous parameter mappings become Tools. Unsupported or insufficiently documented capabilities remain unavailable; other capabilities can still pass.
+CJ 依次尝试 `--help` 和 `-h`，并只探测用法中明确列出的子命令。单次探测最多 3 秒和 64 KiB 输出，每个 CLI 最多 20 次探测和 256 KiB 文档。帮助在最小环境、关闭 stdin 的进程中读取，绝不运行业务示例。当前 Profile 的模型只审核经过本地检查和脱敏后的文档；只有参数映射清晰的叶子命令会成为 Tool。
 
-To supplement weak help, place `my-cli.md` or `my-cli.help.txt` alongside the executable or symlink. For example:
-
-```text
-Greet a person by name.
-Usage: my-cli --name NAME
---name NAME: required string; the person to greet.
-Example: my-cli --name Alice
-```
-
-Use actual syntax and describe required arguments, accepted values, defaults, limitations and output. A generic shared `README.md` is not automatically attributed to every executable. Supplementary text is collected once and can document any explicitly discovered and probed child command. Repeatable/variadic arguments, conditional parameter grammars, arbitrary command passthrough and shell syntax are not supported in this first version.
+若帮助较弱，可在当前 PATH 解析到的入口旁放置 `<command>.md` 或 `<command>.help.txt`。文档应写明实际调用语法、必填参数、值域、默认行为和限制。重复或可变参数、条件语法、任意参数透传与 Shell 语法在当前版本不支持。
 
 ```bash
-cj tools refresh --force          # Recollect help and review, ignoring old decisions
-cj --profile work tools refresh   # Use another configured model profile
+cj tools refresh --force          # 重新采集并审核全部已注册命令
+cj --profile work tools refresh   # 使用另一个 Profile 审核
 cj tools show <generated-tool-name>
-cj config cli-dir remove "$HOME/my-cli-tools"
 ```
 
-`tools list`, `tools show` and `tools doctor` inspect current files and validated cached decisions without starting executables or contacting a model. Diagnostics distinguish pending, approved, partially approved, rejected, unsupported and failed candidates. Review/network errors leave the affected CLI unavailable and can be retried with `tools refresh`; they do not disable built-in Tools.
-
-Reviews are cached in the local state directory under `external-cli-cache/`, separately from audit history. Executable contents, symlink target, companion documentation, model configuration and review-rule version determine reuse. Changes invalidate approval; dependencies outside the executable and companion files require `--force`. Long-running sessions refresh the configured directory list at each task boundary. Removing a directory or executable revokes its generated Tools at the next boundary.
-
-Approved external Tools always require execution confirmation, use fixed executable/subcommand paths and validated argv, and inherit process cancellation, timeouts, output limits, redaction and audit logging. Documentation approval assesses callability, not business correctness or trustworthiness. Existing `run_command` behavior is unchanged.
+`tools list`、`tools show`、`tools registrations` 和 `tools doctor` 只读取当前 PATH 与缓存，不会启动外部 CLI 或调用模型。审核缓存位于本地状态目录的 `external-cli-cache/`，与审计历史分离。所有批准后的外部 Tool 固定可执行文件和子命令路径、验证 argv，并继承确认、取消、超时、输出限制、脱敏和审计；每一次执行仍需要交互确认。

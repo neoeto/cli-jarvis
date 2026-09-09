@@ -114,6 +114,47 @@ const ok = true;
   });
 
   it.each([
+    ["zh-CN", 60, true],
+    ["en", 60, false],
+    ["zh-CN", 120, false]
+  ] as const)("boxes batch confirmations in %s at %i columns (plain: %s)", async (language, columns, plain) => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const original = Object.getOwnPropertyDescriptor(process.stderr, "columns");
+    Object.defineProperty(process.stderr, "columns", { configurable: true, value: columns });
+    try {
+      const renderer = createHumanRenderer({ verbose: false, language, plain, noColor: true });
+      const requests = [
+        {
+          actionId: "command-id", toolName: "run_command",
+          summary: "在工作区运行 date，检查 café 和 e\u0301。".repeat(4) + "\n下一行 👩‍💻",
+          targets: ["/workspace/项目/".repeat(12)], effects: ["process"]
+        },
+        {
+          actionId: "search-id", toolName: "search_web", summary: "上海明天天气预报",
+          targets: ["https://api.tavily.com/search"], effects: ["network"]
+        }
+      ];
+      await renderer({ type: "confirmation_batch_requested", requests });
+      const lines = write.mock.calls.map(([value]) => String(value)).join("").trimEnd().split("\n");
+      expect(lines[0]).toMatch(/^┏.*┓$/u);
+      expect(lines[0]).toContain(language === "zh-CN" ? "! 需要确认（2 个操作）" : "! Confirmation required (2 operations)");
+      expect(lines.at(-1)).toMatch(/^┗━+┛$/u);
+      for (const line of lines.slice(1, -1)) expect(line).toMatch(/^┃ .* ┃$/u);
+      for (const line of lines) expect(displayWidth(line)).toBe(Math.min(100, columns - 2));
+      const content = lines.slice(1, -1).map((line) => line.slice(2, -2).trimEnd()).join("");
+      for (const [index, request] of requests.entries()) {
+        expect(content).toContain(`${index + 1}. ${request.toolName}:`);
+        expect(content).toContain(request.summary.replaceAll("\n", ""));
+        for (const target of request.targets) expect(content).toContain(target);
+      }
+      expect(lines.join("\n")).not.toContain("\u001b[");
+    } finally {
+      if (original) Object.defineProperty(process.stderr, "columns", original);
+      else Reflect.deleteProperty(process.stderr, "columns");
+    }
+  });
+
+  it.each([
     ["zh-CN", 60, 58],
     ["en", 100, 98],
     ["zh-CN", 120, 100]

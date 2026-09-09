@@ -5,6 +5,8 @@ import type { AgentEvent } from "../agent/events.js";
 import { redactSecrets } from "../policy/sensitive-data.js";
 import { CjError } from "../shared/errors.js";
 import { renderAuditHtml } from "./html.js";
+import type { ModelUsage } from "../providers/types.js";
+import { addModelUsage, hasCacheBreakdown } from "../providers/usage.js";
 
 export interface AuditRecord {
   version: 1;
@@ -35,7 +37,33 @@ export interface TaskHistorySummary {
   eventCount: number;
   durationMs?: number;
   errorCode?: string;
+  title?: string;
+  usage?: ModelUsage;
+  usageRequests: number;
+  unknownUsageRequests: number;
+  cacheReportedRequests: number;
+  reasoningReportedRequests: number;
 }
+
+export interface SessionHistorySummary {
+  kind: "chat";
+  sessionId: string;
+  title?: string;
+  startedAt: string;
+  lastActiveAt: string;
+  status: TaskHistorySummary["status"];
+  turns: number;
+  failedTurns: number;
+  cancelledTurns: number;
+  toolCalls: number;
+  usage?: ModelUsage;
+  usageRequests: number;
+  unknownUsageRequests: number;
+  cacheReportedRequests: number;
+  reasoningReportedRequests: number;
+}
+
+export type HistorySummary = ({ kind: "task"; lastActiveAt: string } & TaskHistorySummary) | SessionHistorySummary;
 
 export type AuditExportFormat = "jsonl" | "html";
 
@@ -110,6 +138,25 @@ function auditDataForAgentEvent(event: AgentEvent): Record<string, unknown> {
       return { responseLength: event.content.length };
     case "memory_used":
       return { memoryIds: event.ids, purpose: safeText(event.purpose) };
+    case "task_title":
+      return { title: safeText(event.title), generated: event.generated };
+    case "model_usage":
+      return {
+        requestId: event.requestId,
+        model: safeText(event.model),
+        purpose: safeText(event.purpose),
+        success: event.success,
+        ...(event.usage ? { usage: event.usage } : {})
+      };
+    case "usage_summary":
+      return {
+        scope: event.scope,
+        requests: event.requests,
+        unknownRequests: event.unknownRequests,
+        cacheReportedRequests: event.cacheReportedRequests,
+        reasoningReportedRequests: event.reasoningReportedRequests,
+        ...(event.usage ? { usage: event.usage } : {})
+      };
   }
 }
 
@@ -199,12 +246,31 @@ export class AuditStore {
         startedAt: record.timestamp,
         status: "incomplete" as const,
         toolCalls: 0,
-        eventCount: 0
+        eventCount: 0,
+        usageRequests: 0,
+        unknownUsageRequests: 0,
+        cacheReportedRequests: 0,
+        reasoningReportedRequests: 0
       };
       current.eventCount += 1;
       if (record.sessionId && !current.sessionId) current.sessionId = record.sessionId;
       if (record.timestamp < current.startedAt) current.startedAt = record.timestamp;
       if (record.event === "tool_start" || record.event === "tool_preview") current.toolCalls += 1;
+      if (record.event === "task_title" && typeof record.data.title === "string") current.title = record.data.title;
+      if (record.event === "model_usage") {
+        current.usageRequests += 1;
+        const usage = record.data.usage;
+        if (usage && typeof usage === "object" &&
+          typeof (usage as ModelUsage).inputTokens === "number" &&
+          typeof (usage as ModelUsage).outputTokens === "number" &&
+          typeof (usage as ModelUsage).totalTokens === "number") {
+          current.usage = addModelUsage(current.usage, usage as ModelUsage);
+          if (hasCacheBreakdown(usage as ModelUsage)) current.cacheReportedRequests += 1;
+          if ((usage as ModelUsage).reasoningTokens !== undefined) current.reasoningReportedRequests += 1;
+        } else {
+          current.unknownUsageRequests += 1;
+        }
+      }
       if (record.event === "task_status" && typeof record.data.status === "string") {
         if (record.data.status === "cancelled") current.status = "cancelled";
         if (record.data.status === "failed") current.status = "failed";
@@ -228,6 +294,63 @@ export class AuditStore {
 
   async listTaskSummaries(limit = 50): Promise<TaskHistorySummary[]> {
     return this.summarizeRecords(await this.list(Number.MAX_SAFE_INTEGER), limit);
+  }
+
+  summarizeHistory(records: AuditRecord[], limit = 50): HistorySummary[] {
+    const tasks = this.summarizeRecords(records, Number.MAX_SAFE_INTEGER);
+    const grouped = new Map<string, SessionHistorySummary>();
+    const output: HistorySummary[] = [];
+    for (const task of tasks) {
+      const lastActiveAt = task.finishedAt ?? task.startedAt;
+      if (!task.sessionId) {
+        output.push({ kind: "task", lastActiveAt, ...task });
+        continue;
+      }
+      const current = grouped.get(task.sessionId);
+      if (!current) {
+        grouped.set(task.sessionId, {
+          kind: "chat",
+          sessionId: task.sessionId,
+          ...(task.title ? { title: task.title } : {}),
+          startedAt: task.startedAt,
+          lastActiveAt,
+          status: task.status,
+          turns: 1,
+          failedTurns: task.status === "failed" ? 1 : 0,
+          cancelledTurns: task.status === "cancelled" ? 1 : 0,
+          toolCalls: task.toolCalls,
+          ...(task.usage ? { usage: task.usage } : {}),
+          usageRequests: task.usageRequests,
+          unknownUsageRequests: task.unknownUsageRequests,
+          cacheReportedRequests: task.cacheReportedRequests,
+          reasoningReportedRequests: task.reasoningReportedRequests
+        });
+        continue;
+      }
+      current.turns += 1;
+      current.failedTurns += task.status === "failed" ? 1 : 0;
+      current.cancelledTurns += task.status === "cancelled" ? 1 : 0;
+      current.toolCalls += task.toolCalls;
+      current.usageRequests += task.usageRequests;
+      current.unknownUsageRequests += task.unknownUsageRequests;
+      current.cacheReportedRequests += task.cacheReportedRequests;
+      current.reasoningReportedRequests += task.reasoningReportedRequests;
+      if (task.usage) current.usage = addModelUsage(current.usage, task.usage);
+      if (lastActiveAt >= current.lastActiveAt) {
+        current.lastActiveAt = lastActiveAt;
+        current.status = task.status;
+      }
+      if (task.startedAt < current.startedAt) {
+        current.startedAt = task.startedAt;
+        if (task.title) current.title = task.title;
+      }
+    }
+    output.push(...grouped.values());
+    return output.sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt)).slice(0, limit);
+  }
+
+  async listHistorySummaries(limit = 50): Promise<HistorySummary[]> {
+    return this.summarizeHistory(await this.list(Number.MAX_SAFE_INTEGER), limit);
   }
 
   async recordsForTask(taskIdOrPrefix: string): Promise<{ taskId: string; records: AuditRecord[] }> {

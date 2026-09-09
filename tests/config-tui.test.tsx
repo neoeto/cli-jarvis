@@ -54,7 +54,8 @@ describe("config TUI rendering", () => {
   it("renders the settings navigation without rendering API key contents", () => {
     const app = render(<ConfigTuiApp
       initial={createConfigDraft(defaultConfig, auth)}
-      validateExternalDirectory={async (value) => value}
+      externalEntries={{}}
+      validateExternalCommand={async (value) => ({ command: value, entry: "/usr/bin/example" })}
       onApply={async () => undefined}
     />);
     const frame = app.lastFrame() ?? "";
@@ -70,7 +71,8 @@ describe("config TUI rendering", () => {
         version: 1,
         providers: { tavily: { type: "env", variable: "TAVILY_API_KEY" } }
       })}
-      validateExternalDirectory={async (value) => value}
+      externalEntries={{}}
+      validateExternalCommand={async (value) => ({ command: value, entry: "/usr/bin/example" })}
       onApply={async () => undefined}
     />);
     app.stdin.write("\u001b[B");
@@ -80,6 +82,22 @@ describe("config TUI rendering", () => {
     expect(frame).toContain("网络搜索");
     expect(frame).toContain("启用 Tavily 网络搜索: 开启");
     expect(frame).toContain("Tavily API Key: 环境变量: TAVILY_API_KEY");
+    app.unmount();
+  });
+
+  it("shows registered PATH commands with their current resolution", async () => {
+    const app = render(<ConfigTuiApp
+      initial={createConfigDraft({ ...defaultConfig, externalCli: { commands: ["greet", "missing"] } }, auth)}
+      externalEntries={{ greet: "/usr/local/bin/greet", missing: "" }}
+      validateExternalCommand={async (value) => ({ command: value, entry: `/usr/local/bin/${value}` })}
+      onApply={async () => undefined}
+    />);
+    for (let index = 0; index < 5; index++) app.stdin.write("\u001b[B");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const frame = app.lastFrame() ?? "";
+    expect(frame).toContain("PATH 工具");
+    expect(frame).toContain("/usr/local/bin/greet");
+    expect(frame).toContain("当前 PATH 中不可用");
     app.unmount();
   });
 

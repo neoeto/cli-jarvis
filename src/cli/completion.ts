@@ -42,7 +42,7 @@ async function cachedExternalToolNames(store: ConfigStore, registry: ToolRegistr
       signal: AbortSignal.timeout(1500)
     });
   } catch {
-    // Completion must remain useful when a configured directory is unavailable.
+    // Completion must remain useful when a registered PATH command is unavailable.
   }
   return registry.entries().map((tool) => tool.definition.function.name);
 }
@@ -50,6 +50,14 @@ async function cachedExternalToolNames(store: ConfigStore, registry: ToolRegistr
 async function profileNames(store: ConfigStore): Promise<string[]> {
   try {
     return Object.keys((await store.loadConfig()).profiles).sort();
+  } catch {
+    return [];
+  }
+}
+
+async function registeredExternalCommands(store: ConfigStore): Promise<string[]> {
+  try {
+    return (await store.loadConfig()).externalCli.commands.slice().sort();
   } catch {
     return [];
   }
@@ -78,6 +86,8 @@ async function candidates(
     }
   } else if (resolved.path.at(-2) === "tools" && resolved.path.at(-1) === "show" && store && registry) {
     values = await cachedExternalToolNames(store, registry);
+  } else if (resolved.path.at(-2) === "tools" && resolved.path.at(-1) === "unregister" && store) {
+    values = await registeredExternalCommands(store);
   } else {
     values = [
       ...visibleCommands(resolved.command).map((command) => command.name()),

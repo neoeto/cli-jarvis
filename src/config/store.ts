@@ -51,7 +51,7 @@ export class ConfigStore {
     if (!migrated) throw new CjError("CONFIG_INVALID", `Invalid config: ${result.error.message}`);
     // Migrate in memory first. Read-only commands (doctor, list, tools) must
     // not mutate a user's configuration merely by inspecting it; the next
-    // explicit configuration save persists the v2 form atomically.
+    // explicit configuration save persists the current form atomically.
     return migrated;
   }
 

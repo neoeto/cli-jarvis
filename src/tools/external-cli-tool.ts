@@ -5,14 +5,14 @@ import type { Capability } from "./external-cli-review.js";
 import { RunCommandTool } from "./builtins/run-command.js";
 import type { Tool, ToolContext, PreparedAction } from "./types.js";
 
-export function externalToolName(entry: string, command: string[]): string {
-  const label = `${entry.split(/[\\/]/).pop()}_${command.join("_")}`.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 40);
-  return `cli_${label}_${createHash("sha256").update(JSON.stringify([entry, command])).digest("hex").slice(0, 12)}`;
+export function externalToolName(registration: string, command: string[]): string {
+  const label = `${registration}_${command.join("_")}`.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 40);
+  return `cli_${label}_${createHash("sha256").update(JSON.stringify([registration, command])).digest("hex").slice(0, 12)}`;
 }
 
-export function createExternalTool(entry: string, executable: string, capability: Capability, assertUnchanged: () => Promise<void>): Tool {
+export function createExternalTool(registration: string, executable: string, capability: Capability, assertUnchanged: () => Promise<void>): Tool {
   const runner = new RunCommandTool();
-  const name = externalToolName(entry, capability.command);
+  const name = externalToolName(registration, capability.command);
   const shape: Record<string, z.ZodTypeAny> = {};
   const properties: Record<string, unknown> = {};
   for (const parameter of capability.parameters) {
