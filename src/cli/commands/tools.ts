@@ -1,4 +1,5 @@
-import { normalizeExternalCommand, refreshExternalTools, resolveExternalCommand } from "../../tools/external-cli.js";
+import { externalRegistrationLabel, normalizeExternalRegistration, refreshExternalTools, resolveExternalCommand, sameExternalRegistration } from "../../tools/external-cli.js";
+import type { ExternalCliRegistration } from "../../config/schema.js";
 import { createProvider } from "../../providers/deepseek.js";
 import type { Command } from "commander";
 import type { ToolRegistry } from "../../tools/registry.js";
@@ -105,8 +106,8 @@ export function addToolsCommand(program: Command, registry: ToolRegistry, store?
   const command = program.command("tools")
     .description("Inspect tools and manage PATH-registered external CLI capabilities")
     .addHelpText("after", `
-Register one existing executable from PATH at a time. CJ collects bounded help
-and reviews documented capabilities before exposing them as Tools. Every external
+Register one existing PATH executable or subcommand tree at a time. CJ collects bounded help
+and reviews documented leaf capabilities in that scope before exposing them as Tools. Every external
 Tool remains high risk and requires confirmation at execution time.
 
 list, show, registrations and doctor use cached reviews without running help
@@ -114,14 +115,14 @@ probes or contacting a model. register and refresh collect help and use the
 selected model as needed.
 
 Examples:
-  cj tools register kubectl
+  cj tools register kubectl get pods
   cj tools list --page 2 --page-size 20
   cj tools registrations
-  cj tools unregister kubectl
+  cj tools unregister kubectl get pods
   cj tools refresh --force
 `);
 
-  const external = async (refresh = false, force = false, commands?: readonly string[]) => {
+  const external = async (refresh = false, force = false, registrations?: readonly ExternalCliRegistration[]) => {
     if (!store) return [];
     let config = await store.loadConfig();
     const profileName = program.opts().profile as string | undefined;
@@ -136,7 +137,7 @@ Examples:
       stateDir: store.paths.stateDir,
       signal: AbortSignal.timeout(config.limits.taskTimeoutMs),
       force,
-      ...(commands ? { commands } : {}),
+      ...(registrations ? { registrations } : {}),
       ...(refresh ? { provider: async () => createProvider(config, await store.resolveApiKey(config.provider.id)) } : {})
     });
   };
@@ -150,36 +151,36 @@ Examples:
   };
 
   command.command("register")
-    .description("Register one executable currently available on PATH and review it now")
-    .argument("<command>", "one executable name, without a path or arguments")
-    .action(async (value: string) => {
+    .description("Register one PATH executable or one of its subcommand trees and review it now")
+    .argument("<registration...>", "one executable name followed by optional fixed subcommands")
+    .action(async (values: string[]) => {
       if (!store) throw new CjError("CONFIG_INVALID", "Local configuration is unavailable");
-      const registered = normalizeExternalCommand(value);
+      const registered = normalizeExternalRegistration(values);
       // Do not persist names that cannot be resolved by this CJ process.
-      await resolveExternalCommand(registered);
+      await resolveExternalCommand(registered.command);
       const config = await store.loadConfig();
-      if (!config.externalCli.commands.includes(registered)) {
-        await store.saveConfig({ ...config, externalCli: { commands: [...config.externalCli.commands, registered] } });
+      if (!config.externalCli.registrations.some((item) => sameExternalRegistration(item, registered))) {
+        await store.saveConfig({ ...config, externalCli: { registrations: [...config.externalCli.registrations, registered] } });
       }
       const [result] = await external(true, false, [registered]);
-      if (!result) throw new CjError("TOOL_FAILED", `Registered command was not available for review: ${registered}`);
+      if (!result) throw new CjError("TOOL_FAILED", `Registered command was not available for review: ${externalRegistrationLabel(registered)}`);
       process.stdout.write(`${result.status}\t${result.command}\t${result.entry}\t${result.message}\n`);
       if (result.status !== "approved" && result.status !== "partial") process.exitCode = 1;
     });
 
   command.command("unregister")
-    .description("Remove one PATH command registration without changing the executable")
-    .argument("<command>", "registered command name")
-    .action(async (value: string) => {
+    .description("Remove one PATH command or subcommand-tree registration without changing the executable")
+    .argument("<registration...>", "registered executable name and optional subcommand path")
+    .action(async (values: string[]) => {
       if (!store) throw new CjError("CONFIG_INVALID", "Local configuration is unavailable");
-      const registered = normalizeExternalCommand(value);
+      const registered = normalizeExternalRegistration(values);
       const config = await store.loadConfig();
-      if (!config.externalCli.commands.includes(registered)) {
-        throw new CjError("CONFIG_INVALID", `Command is not registered: ${registered}`);
+      if (!config.externalCli.registrations.some((item) => sameExternalRegistration(item, registered))) {
+        throw new CjError("CONFIG_INVALID", `Command is not registered: ${externalRegistrationLabel(registered)}`);
       }
-      await store.saveConfig({ ...config, externalCli: { commands: config.externalCli.commands.filter((item) => item !== registered) } });
+      await store.saveConfig({ ...config, externalCli: { registrations: config.externalCli.registrations.filter((item) => !sameExternalRegistration(item, registered)) } });
       registry.removeExternalTools();
-      process.stdout.write(`Unregistered PATH CLI: ${registered}\n`);
+      process.stdout.write(`Unregistered PATH CLI: ${externalRegistrationLabel(registered)}\n`);
     });
 
   command.command("registrations")

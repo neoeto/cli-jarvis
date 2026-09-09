@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { ConfigStore } from "../config/store.js";
-import { refreshExternalTools } from "../tools/external-cli.js";
+import { externalRegistrationLabel, refreshExternalTools } from "../tools/external-cli.js";
 import type { ToolRegistry } from "../tools/registry.js";
 
 export type CompletionShell = "bash" | "zsh" | "fish" | "powershell";
@@ -57,7 +57,7 @@ async function profileNames(store: ConfigStore): Promise<string[]> {
 
 async function registeredExternalCommands(store: ConfigStore): Promise<string[]> {
   try {
-    return (await store.loadConfig()).externalCli.commands.slice().sort();
+    return (await store.loadConfig()).externalCli.registrations.map(externalRegistrationLabel).sort();
   } catch {
     return [];
   }

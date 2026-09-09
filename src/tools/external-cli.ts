@@ -4,7 +4,7 @@ import { access, mkdir, open, realpath, rename, stat, unlink, writeFile } from "
 import { constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { AppConfig } from "../config/schema.js";
+import type { AppConfig, ExternalCliRegistration } from "../config/schema.js";
 import type { ModelProvider } from "../providers/types.js";
 import { minimalProcessEnvironment, runProcess } from "../process/run.js";
 import { redactSecrets } from "../policy/sensitive-data.js";
@@ -15,6 +15,7 @@ import type { ToolRegistry } from "./registry.js";
 // Invalidate both old approvals and old rejections when collection/review changes.
 const RULE_VERSION = 3;
 const MAX_DOCUMENT_BYTES = 256 * 1024;
+const MAX_SUBCOMMAND_DEPTH = 16;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const safeMessage = (error: unknown) => redactSecrets(error instanceof Error ? error.message : String(error)).value.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 2000);
 
@@ -43,8 +44,8 @@ export interface ExternalRefreshOptions {
   provider?: () => Promise<ModelProvider>;
   signal: AbortSignal;
   force?: boolean;
-  /** Restrict a refresh to explicitly registered command names. */
-  commands?: readonly string[];
+  /** Restrict a refresh to explicitly registered command paths. */
+  registrations?: readonly ExternalCliRegistration[];
 }
 
 class CommandResolutionError extends Error {
@@ -60,6 +61,24 @@ export function normalizeExternalCommand(value: string): string {
   }
   if (command.length > 255) throw new Error("CLI command name is too long");
   return process.platform === "win32" ? command.toLowerCase() : command;
+}
+
+export function normalizeExternalRegistration(values: readonly string[]): ExternalCliRegistration {
+  const [commandValue, ...subcommand] = values;
+  if (!commandValue) throw new Error("CLI registration requires one PATH command name");
+  if (subcommand.length > MAX_SUBCOMMAND_DEPTH) throw new Error(`CLI registration may contain at most ${MAX_SUBCOMMAND_DEPTH} subcommands`);
+  for (const token of subcommand) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(token)) throw new Error("CLI subcommands must be command tokens");
+  }
+  return { command: normalizeExternalCommand(commandValue), subcommand };
+}
+
+export function externalRegistrationLabel(registration: ExternalCliRegistration): string {
+  return [registration.command, ...registration.subcommand].join(" ");
+}
+
+export function sameExternalRegistration(left: ExternalCliRegistration, right: ExternalCliRegistration): boolean {
+  return left.command === right.command && left.subcommand.length === right.subcommand.length && left.subcommand.every((item, index) => item === right.subcommand[index]);
 }
 
 function windowsExtensions(): string[] {
@@ -158,11 +177,11 @@ async function snapshotCommand(command: string, signal: AbortSignal): Promise<Sn
   return snapshot(normalized, await resolveExternalCommand(normalized), signal);
 }
 
-export async function collectHelp(command: string, initial: Snapshot, signal: AbortSignal): Promise<HelpDocument[]> {
+export async function collectHelp(command: string, initial: Snapshot, signal: AbortSignal, selectedSubcommand: readonly string[] = []): Promise<HelpDocument[]> {
   let bytesLeft = MAX_DOCUMENT_BYTES;
   let probes = 0;
   const documents: HelpDocument[] = [];
-  const queue: string[][] = [[]];
+  const queue: string[][] = [Array.from(selectedSubcommand)];
   const take = (text: string): string => {
     const buffer = Buffer.from(redactSecrets(text).value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""));
     const result = buffer.subarray(0, bytesLeft).toString("utf8");
@@ -195,16 +214,17 @@ export async function collectHelp(command: string, initial: Snapshot, signal: Ab
       }
       if (usableHelp(text)) break;
     }
-    const combined = subcommand.length === 0 ? `${text}\n${sidecar}` : text;
+    const selectedRoot = subcommand.length === selectedSubcommand.length && subcommand.every((token, index) => token === selectedSubcommand[index]);
+    const combined = selectedRoot ? `${text}\n${sidecar}` : text;
     const children = helpChildren(combined);
-    documents.push({ command: subcommand, text, children, truncated, attempts, ...(subcommand.length === 0 ? { supplementary: sidecar } : {}) });
-    if (subcommand.length < 4) for (const child of children) queue.push([...subcommand, child]);
+    documents.push({ command: subcommand, text, children, truncated, attempts, ...(selectedRoot ? { supplementary: sidecar } : {}) });
+    if (subcommand.length < MAX_SUBCOMMAND_DEPTH) for (const child of children) queue.push([...subcommand, child]);
   }
   return documents;
 }
 
 function collectionRejections(documents: HelpDocument[]): Review["rejected"] {
-  const supplementary = documents[0]?.supplementary ?? "";
+  const supplementary = documents.find((item) => item.supplementary !== undefined)?.supplementary ?? "";
   const rejected: Review["rejected"] = [];
   for (const doc of documents) {
     if (!usableHelp(`${doc.text}\n${supplementary}`)) {
@@ -221,11 +241,10 @@ function collectionRejections(documents: HelpDocument[]): Review["rejected"] {
   return rejected;
 }
 
-function requestedCommands(config: AppConfig, commands: readonly string[] | undefined): string[] {
-  const registered = config.externalCli.commands;
-  if (!commands) return registered;
-  const selected = new Set(commands.map(normalizeExternalCommand));
-  return registered.filter((command) => selected.has(command));
+function requestedRegistrations(config: AppConfig, registrations: readonly ExternalCliRegistration[] | undefined): ExternalCliRegistration[] {
+  const registered = config.externalCli.registrations;
+  if (!registrations) return registered;
+  return registered.filter((registration) => registrations.some((selected) => sameExternalRegistration(registration, selected)));
 }
 
 export async function refreshExternalTools(options: ExternalRefreshOptions): Promise<ExternalDiagnostic[]> {
@@ -235,19 +254,22 @@ export async function refreshExternalTools(options: ExternalRefreshOptions): Pro
   const targets = new Set<string>();
   const cacheDir = path.join(options.stateDir, "external-cli-cache");
   let provider: ModelProvider | undefined;
-  for (const command of requestedCommands(config, options.commands)) {
+  for (const registration of requestedRegistrations(config, options.registrations)) {
     signal.throwIfAborted();
-    const diagnostic: ExternalDiagnostic = { command, entry: command, status: "pending", message: "Awaiting documentation review", tools: [] };
+    const command = registration.command;
+    const label = externalRegistrationLabel(registration);
+    const diagnostic: ExternalDiagnostic = { command: label, entry: command, status: "pending", message: "Awaiting documentation review", tools: [] };
     let errorFile: string | undefined;
     try {
       const initial = await snapshotCommand(command, signal);
       diagnostic.entry = initial.entry;
-      if (targets.has(initial.target)) {
+      const targetKey = JSON.stringify([initial.target, registration.subcommand]);
+      if (targets.has(targetKey)) {
         diagnostics.push({ ...diagnostic, status: "duplicate", message: "Duplicate real executable path" });
         continue;
       }
-      targets.add(initial.target);
-      const key = digest(JSON.stringify([RULE_VERSION, initial.fingerprint, config.provider]));
+      targets.add(targetKey);
+      const key = digest(JSON.stringify([RULE_VERSION, initial.fingerprint, registration.subcommand, config.provider]));
       const cacheFile = path.join(cacheDir, `${key}.json`);
       errorFile = path.join(cacheDir, `${key}.error.json`);
       if (options.force && options.provider) await unlink(cacheFile).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
@@ -260,7 +282,7 @@ export async function refreshExternalTools(options: ExternalRefreshOptions): Pro
         } catch { /* Missing/corrupt cache is pending, never executable. */ }
       }
       if (!cached && options.provider) {
-        const documents = await collectHelp(command, initial, signal);
+        const documents = await collectHelp(command, initial, signal, registration.subcommand);
         let review: Review;
         if (!documents.some((doc) => usableHelp(`${doc.text}\n${documents[0]?.supplementary ?? ""}`))) {
           review = { capabilities: [], rejected: [] };
@@ -296,8 +318,10 @@ export async function refreshExternalTools(options: ExternalRefreshOptions): Pro
               throw new Error("CLI, PATH resolution or documentation changed; refresh before executing");
             }
           });
-          registry.register(tool, "external-cli");
           diagnostic.tools.push(tool.definition.function.name);
+          const existingOrigin = registry.origin(tool.definition.function.name);
+          if (existingOrigin === "external-cli") continue;
+          registry.register(tool, "external-cli");
         }
         const reasons = cached.review.rejected.map((item) => `${item.command.join(" ") || "(root)"} [${item.kind ?? "documentation"}]: ${item.reason}`);
         diagnostic.status = diagnostic.tools.length ? (reasons.length ? "partial" : "approved")

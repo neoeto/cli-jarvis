@@ -11,14 +11,14 @@ export const parameterSchema = z.object({
   evidence: z.string().min(3).max(2000)
 }).strict();
 export const capabilitySchema = z.object({
-  command: z.array(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/)).max(4),
+  command: z.array(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/)).max(16),
   description: z.string().min(10).max(3000),
   example: z.string().min(3).max(2000),
   evidence: z.string().min(3).max(2000),
   parameters: z.array(parameterSchema).max(128)
 }).strict();
 const rejectionSchema = z.object({
-  command: z.array(z.string()).max(4), reason: z.string().min(1).max(2000),
+  command: z.array(z.string()).max(16), reason: z.string().min(1).max(2000),
   kind: z.enum(["documentation", "unsupported", "review", "collection", "group", "limit"]).optional()
 }).strict();
 export const reviewSchema = z.object({
@@ -30,7 +30,7 @@ const reviewInputSchema = z.object({
     // Parse the model response before enforcing the command-token grammar so
     // that an otherwise valid response which repeats the executable name can
     // be normalized safely.
-    command: z.array(z.string().min(1).max(100)).max(4)
+    command: z.array(z.string().min(1).max(100)).max(16)
   })).max(20),
   rejected: z.array(rejectionSchema).max(100)
 }).strict();
@@ -95,7 +95,7 @@ export function parseReview(input: unknown, executableName?: string, documents: 
 }
 
 export function validateReview(review: Review, documents: HelpDocument[]): Review {
-  const supplementary = documents.find((item) => item.command.length === 0)?.supplementary ?? "";
+  const supplementary = documents.find((item) => item.supplementary !== undefined)?.supplementary ?? "";
   const seen = new Set<string>();
   for (const capability of review.capabilities) {
     const key = JSON.stringify(capability.command);
@@ -138,7 +138,7 @@ Parameters are in invocation order; null flag is a positional value, boolean fla
 Rejected entries: {command: string[], kind: "documentation"|"unsupported", reason: string}. Use documentation only for missing/ambiguous usage, and unsupported for a clear usage the adapter cannot represent. Never invent parameter values or code.`;
 
 export function reviewSourceLines(doc: HelpDocument, documents: HelpDocument[]): string[] {
-  const supplementary = documents.find((item) => item.command.length === 0)?.supplementary ?? "";
+  const supplementary = documents.find((item) => item.supplementary !== undefined)?.supplementary ?? "";
   return `${doc.text}\n${supplementary}`.split(/\r?\n/);
 }
 
@@ -150,7 +150,7 @@ function resolveLines(raw: unknown, lines: string[], field: string): string {
 }
 
 function resolveCapability(raw: unknown, documents: HelpDocument[], executableName?: string): Capability {
-  const input = z.object({ command: z.array(z.string()).max(5) }).passthrough().parse(raw);
+  const input = z.object({ command: z.array(z.string()).max(16) }).passthrough().parse(raw);
   const command = normalizeCommand(input.command, executableName, documents);
   const doc = documents.find((item) => JSON.stringify(item.command) === JSON.stringify(command));
   if (!doc) throw new Error(`Unprobed command: ${command.join(" ") || "(root)"}`);
@@ -211,7 +211,7 @@ export async function reviewHelp(provider: ModelProvider, model: string, documen
           if (accepted.has(key)) continue;
           accepted.set(key, cap); rejected.delete(key);
         } catch (error) {
-          const candidate = z.object({ command: z.array(z.string()).max(4) }).safeParse(raw);
+          const candidate = z.object({ command: z.array(z.string()).max(16) }).safeParse(raw);
           if (candidate.success) command = normalizeCommand(candidate.data.command, executableName, documents);
           const reason = reviewError(error);
           feedback.push(`${JSON.stringify(command)}: ${reason}`);

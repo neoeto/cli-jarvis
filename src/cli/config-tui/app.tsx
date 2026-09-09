@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { AuthConfig } from "../../config/schema.js";
+import { externalRegistrationLabel, sameExternalRegistration } from "../../tools/external-cli.js";
 import type { ConfigDraft } from "./model.js";
 import {
   activeProfile,
@@ -47,7 +48,7 @@ interface Confirmation {
 export interface ConfigTuiAppProps {
   initial: ConfigDraft;
   onApply: (draft: ConfigDraft) => Promise<void>;
-  validateExternalCommand: (value: string) => Promise<{ command: string; entry: string }>;
+  validateExternalCommand: (value: string) => Promise<{ registration: { command: string; subcommand: string[] }; entry: string }>;
   externalEntries: Readonly<Record<string, string>>;
 }
 
@@ -251,20 +252,26 @@ export function ConfigTuiApp({ initial, onApply, validateExternalCommand, extern
     ];
 
     if (section === "external") return [
-      ...draft.config.externalCli.commands.map((externalCommand, index) => ({
-        label: externalCommand,
-        value: externalPaths[externalCommand] || tr("当前 PATH 中不可用", "unavailable on current PATH"),
+      ...draft.config.externalCli.registrations.map((externalRegistration, index) => {
+        const label = externalRegistrationLabel(externalRegistration);
+        return {
+        label,
+        value: externalPaths[label] || tr("当前 PATH 中不可用", "unavailable on current PATH"),
         hint: tr("保存后立即采集帮助并审核", "Help collection and review run immediately after saving"),
         remove: () => openConfirm({
           title: tr("移除 PATH 工具注册", "Remove PATH tool registration"),
-          body: externalCommand,
-          accept: () => setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { commands: removeAt(current.config.externalCli.commands, index) } } }))
+          body: label,
+          accept: () => setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { registrations: removeAt(current.config.externalCli.registrations, index) } } }))
         })
-      })),
-      { label: tr("注册 PATH 工具", "Register PATH tool"), value: "+", activate: () => openEditor({ title: tr("PATH 中的命令名", "Command name on PATH"), value: "", submit: async (value) => {
+      }; }),
+      { label: tr("注册 PATH 工具", "Register PATH tool"), value: "+", activate: () => openEditor({ title: tr("PATH 命令及可选子命令", "PATH command and optional subcommands"), value: "", submit: async (value) => {
         const resolved = await validateExternalCommand(value);
-        setExternalPaths((current) => ({ ...current, [resolved.command]: resolved.entry }));
-        setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { commands: addUnique(current.config.externalCli.commands, resolved.command) } } }));
+        const label = externalRegistrationLabel(resolved.registration);
+        setExternalPaths((current) => ({ ...current, [label]: resolved.entry }));
+        setDraft((current) => ({ ...current, config: { ...current.config, externalCli: {
+          registrations: current.config.externalCli.registrations.some((item) => sameExternalRegistration(item, resolved.registration))
+            ? current.config.externalCli.registrations : [...current.config.externalCli.registrations, resolved.registration]
+        } } }));
       } }) }
     ];
 

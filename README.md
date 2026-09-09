@@ -232,18 +232,19 @@ See [ROADMAP.md](./ROADMAP.md) for post-MVP feature planning, with improved inte
 
 ```bash
 cj tools register kubectl
+cj tools register kubectl get pods
 cj tools registrations
 cj tools list
 cj tools list --page 2 --page-size 20
 cj tools doctor
-cj tools unregister kubectl
+cj tools unregister kubectl get pods
 ```
 
-`register` 仅接受一个命令名，不能传路径、固定参数、Shell alias、函数或内建命令。它会立刻按当前 PATH 顺序解析命令、采集帮助文档并用当前 Profile 审核能力。POSIX 支持有执行权限的脚本与二进制；Windows 支持 `.exe` 和 `.com`，不支持 `.cmd` 或 `.bat` 包装脚本。注册失败前不会写入配置；文档或模型审核失败时会保留注册，以便通过 `cj tools doctor` 检查并在之后重试。
+`register` 接受一个 PATH 命令名和可选的固定子命令路径，例如 `cj tools register kubectl get pods`。只有根命令会按当前 PATH 顺序解析；子命令必须是安全命令 token，不能传路径、固定选项、Shell alias、函数或内建命令。指定命令组时，CJ 只采集并审核该子树下的叶子能力，不会注册同级分支。POSIX 支持有执行权限的脚本与二进制；Windows 支持 `.exe` 和 `.com`，不支持 `.cmd` 或 `.bat` 包装脚本。文档或模型审核失败时会保留注册，以便通过 `cj tools doctor` 检查并在之后重试。
 
 每个任务、聊天回合、重试和 `cj tools refresh` 都会重新解析 PATH。路径顺序、符号链接目标、可执行文件或伴随文档变化都会使旧审核失效；命令暂时不在 PATH 中会显示为 `missing`，恢复后自动重新审核。生成后的 Tool 名以注册命令和子命令为身份，因此命令升级或 PATH 位置改变后保持稳定。
 
-CJ 依次尝试 `--help` 和 `-h`，并只探测用法中明确列出的子命令。单次探测最多 3 秒和 64 KiB 输出，每个 CLI 最多 20 次探测和 256 KiB 文档。帮助在最小环境、关闭 stdin 的进程中读取，绝不运行业务示例。当前 Profile 的模型只审核经过本地检查和脱敏后的文档；只有参数映射清晰的叶子命令会成为 Tool。
+CJ 依次尝试 `--help` 和 `-h`，并只探测所注册路径之下、用法中明确列出的子命令。单次探测最多 3 秒和 64 KiB 输出，每个注册路径最多 20 次探测和 256 KiB 文档。帮助在最小环境、关闭 stdin 的进程中读取，绝不运行业务示例。当前 Profile 的模型只审核经过本地检查和脱敏后的文档；只有参数映射清晰的叶子命令会成为 Tool。子命令路径作为固定 argv 前缀保留，执行仍须确认并接受指纹校验。
 
 若帮助较弱，可在当前 PATH 解析到的入口旁放置 `<command>.md` 或 `<command>.help.txt`。文档应写明实际调用语法、必填参数、值域、默认行为和限制。重复或可变参数、条件语法、任意参数透传与 Shell 语法在当前版本不支持。
 

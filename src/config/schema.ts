@@ -37,12 +37,17 @@ const legacyConfigSchema = z.object({
 }).strict();
 
 const externalCliCommandSchema = z.string().min(1).max(255).regex(/^[^\s\\/:\0]+$/, "CLI commands must be a single PATH command name");
+const externalCliSubcommandSchema = z.string().min(1).max(100).regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "CLI subcommands must be command tokens");
+export const externalCliRegistrationSchema = z.object({
+  command: externalCliCommandSchema,
+  subcommand: z.array(externalCliSubcommandSchema).max(16).default([])
+}).strict();
 const externalCliDirectoriesSchema = z.object({
   directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([])
 }).strict().default({ directories: [] });
 
 export const appConfigSchema = z.object({
-  version: z.literal(3),
+  version: z.literal(4),
   /** A compatibility mirror of the active profile's provider. Never edit it directly. */
   provider: providerConfigSchema,
   activeProfile: z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
@@ -54,6 +59,44 @@ export const appConfigSchema = z.object({
   limits: profileSchema.shape.limits,
   security: z.object({
     /** Workspace-relative roots that may be addressed by tools. The host ceiling is always the workspace. */
+    allowedRoots: z.array(z.string().min(1).refine(
+      (value) => !/^(?:[a-zA-Z]:[\\/]|[\\/]|\.\.(?:[\\/]|$))/.test(value),
+      "Authorization roots must be workspace-relative"
+    )).min(1).max(100).default(["."])
+  }).default({ allowedRoots: ["."] }),
+  memory: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
+  webSearch: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
+  externalCli: z.object({
+    registrations: z.array(externalCliRegistrationSchema).max(100).default([]).refine(
+      (items) => new Set(items.map((item) => JSON.stringify([item.command, item.subcommand]))).size === items.length,
+      "External CLI registrations must be unique"
+    )
+  }).strict().default({ registrations: [] }),
+  plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] }),
+  skills: z.object({
+    trustedWorkspaceDirectories: z.array(z.object({
+      directory: z.string().min(1).refine((value) => path.isAbsolute(value), "Skill directory must be absolute"),
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/)
+    }).strict()).max(100).default([])
+  }).strict().default({ trustedWorkspaceDirectories: [] })
+}).strict().superRefine((value, context) => {
+  if (!value.profiles[value.activeProfile]) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["activeProfile"], message: "Active profile does not exist" });
+  }
+});
+
+/** The v3 configuration stored whole executable registrations as command strings. */
+const previousConfigSchema = z.object({
+  version: z.literal(3),
+  provider: providerConfigSchema,
+  activeProfile: z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
+  profiles: z.record(z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/), profileSchema).refine(
+    (profiles) => Object.keys(profiles).length > 0,
+    "At least one profile is required"
+  ),
+  language: z.enum(["zh-CN", "en"]),
+  limits: profileSchema.shape.limits,
+  security: z.object({
     allowedRoots: z.array(z.string().min(1).refine(
       (value) => !/^(?:[a-zA-Z]:[\\/]|[\\/]|\.\.(?:[\\/]|$))/.test(value),
       "Authorization roots must be workspace-relative"
@@ -75,8 +118,8 @@ export const appConfigSchema = z.object({
   }
 });
 
-/** The v2 profile configuration; directory registrations are intentionally discarded in v3. */
-const previousConfigSchema = z.object({
+/** The v2 profile configuration; directory registrations are intentionally discarded. */
+const v2ConfigSchema = z.object({
   version: z.literal(2),
   provider: providerConfigSchema,
   activeProfile: z.string().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
@@ -109,12 +152,13 @@ const previousConfigSchema = z.object({
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
+export type ExternalCliRegistration = z.infer<typeof externalCliRegistrationSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 export type ProfileConfig = z.infer<typeof profileSchema>;
 export type LegacyAppConfig = z.infer<typeof legacyConfigSchema>;
 
 export const defaultConfig: AppConfig = {
-  version: 3,
+  version: 4,
   provider: {
     id: "deepseek",
     baseURL: "https://api.deepseek.com",
@@ -152,7 +196,7 @@ export const defaultConfig: AppConfig = {
   security: { allowedRoots: ["."] },
   memory: { enabled: false },
   webSearch: { enabled: false },
-  externalCli: { commands: [] },
+  externalCli: { registrations: [] },
   plugins: { enabled: [] },
   skills: { trustedWorkspaceDirectories: [] }
 };
@@ -161,8 +205,13 @@ export const defaultConfig: AppConfig = {
 export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
   const previous = previousConfigSchema.safeParse(input);
   if (previous.success) {
-    const { externalCli: _discardedDirectories, ...config } = previous.data;
-    return { ...config, version: 3, externalCli: { commands: [] } };
+    const { externalCli, ...config } = previous.data;
+    return { ...config, version: 4, externalCli: { registrations: externalCli.commands.map((command) => ({ command, subcommand: [] })) } };
+  }
+  const v2 = v2ConfigSchema.safeParse(input);
+  if (v2.success) {
+    const { externalCli: _discardedDirectories, ...config } = v2.data;
+    return { ...config, version: 4, externalCli: { registrations: [] } };
   }
   const legacy = legacyConfigSchema.safeParse(input);
   if (!legacy.success) return undefined;
@@ -175,7 +224,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     maxOutputBytes: 512 * 1024
   };
   return {
-    version: 3,
+    version: 4,
     provider,
     activeProfile: "default",
     profiles: { default: { provider, limits } },
@@ -184,7 +233,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     security: { allowedRoots: ["."] },
     memory: { enabled: false },
     webSearch: { enabled: false },
-    externalCli: { commands: [] },
+    externalCli: { registrations: [] },
     plugins: { enabled: [] },
     skills: { trustedWorkspaceDirectories: [] }
   };

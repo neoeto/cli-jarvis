@@ -105,7 +105,7 @@ describe("ConfigStore", () => {
       limits: { maxToolCalls: 5, taskTimeoutMs: 60_000 }
     }));
     const migrated = await store.loadConfig();
-    expect(migrated).toMatchObject({ version: 3, activeProfile: "default", provider: { id: "legacy", kind: "openai-compatible" } });
+    expect(migrated).toMatchObject({ version: 4, activeProfile: "default", provider: { id: "legacy", kind: "openai-compatible" } });
     expect(migrated.profiles.default?.limits.modelTimeoutMs).toBe(60_000);
   });
 
@@ -114,7 +114,7 @@ describe("ConfigStore", () => {
     const { webSearch: _webSearch, ...preWebSearchConfig } = defaultConfig;
     await mkdir(path.dirname(store.paths.configFile), { recursive: true });
     await writeFile(store.paths.configFile, JSON.stringify(preWebSearchConfig));
-    await expect(store.loadConfig()).resolves.toMatchObject({ version: 3, webSearch: { enabled: false } });
+    await expect(store.loadConfig()).resolves.toMatchObject({ version: 4, webSearch: { enabled: false } });
   });
 
   it("migrates v2 settings while discarding directory-based external CLI registrations", async () => {
@@ -128,10 +128,21 @@ describe("ConfigStore", () => {
     await mkdir(path.dirname(store.paths.configFile), { recursive: true });
     await writeFile(store.paths.configFile, JSON.stringify(previous));
     await expect(store.loadConfig()).resolves.toMatchObject({
-      version: 3,
-      externalCli: { commands: [] },
+      version: 4,
+      externalCli: { registrations: [] },
       provider: defaultConfig.provider,
       language: defaultConfig.language
+    });
+  });
+
+  it("migrates v3 whole-command registrations into root registration paths", async () => {
+    const store = await temporaryStore();
+    const previous = { ...defaultConfig, version: 3, externalCli: { commands: ["greet"] } };
+    await mkdir(path.dirname(store.paths.configFile), { recursive: true });
+    await writeFile(store.paths.configFile, JSON.stringify(previous));
+    await expect(store.loadConfig()).resolves.toMatchObject({
+      version: 4,
+      externalCli: { registrations: [{ command: "greet", subcommand: [] }] }
     });
   });
 });

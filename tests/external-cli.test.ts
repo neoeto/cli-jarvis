@@ -27,15 +27,15 @@ async function fixture(content = help) {
   const complete = vi.fn(async () => ({ kind: "message" as const, content: JSON.stringify(review) }));
   const provider: ModelProvider = { id: "fake", complete };
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
-  const config = { ...structuredClone(defaultConfig), externalCli: { commands: ["greet"] } };
+  const config = { ...structuredClone(defaultConfig), externalCli: { registrations: [{ command: "greet", subcommand: [] }] } };
   const options = { registry, config, stateDir: root, signal: new AbortController().signal, provider: async () => provider };
   return { root, directory, entry, registry, complete, options };
 }
 
 describe("external review contracts", () => {
-  it("defaults missing v3 external registrations to an empty list", () => {
+  it("defaults missing external registrations to an empty list", () => {
     const { externalCli: _, ...old } = defaultConfig;
-    expect(appConfigSchema.parse(old).externalCli.commands).toEqual([]);
+    expect(appConfigSchema.parse(old).externalCli.registrations).toEqual([]);
   });
   it("only discovers explicit command listings", () => {
     expect(helpChildren("Examples:\n  erase  everything\nCommands:\n  greet  Say hello\n  help  Show help\nOptions:\n  --all  All" )).toEqual(["greet"]);
@@ -157,7 +157,7 @@ describe.skipIf(process.platform === "win32")("external CLI integration", () => 
     await symlink(f.entry, path.join(second, "alias"));
     await writeFile(path.join(second, "other"), await readFile(f.entry), { mode: 0o755 });
     process.env.PATH = `${f.directory}${path.delimiter}${second}${path.delimiter}${originalPath ?? ""}`;
-    f.options.config.externalCli.commands.push("alias", "other");
+    f.options.config.externalCli.registrations.push({ command: "alias", subcommand: [] }, { command: "other", subcommand: [] });
     const diagnostics = await refreshExternalTools(f.options);
     expect(diagnostics.map((item) => item.status)).toEqual(["approved", "duplicate", "approved"]);
     expect(new Set(f.registry.definitions().map((item) => item.function.name)).size).toBe(3);
@@ -189,6 +189,53 @@ describe.skipIf(process.platform === "win32")("external CLI integration", () => 
     const action = await f.registry.entries()[1]!.prepare({ name: "Neo" }, { workspaceRoot: f.root, signal: f.options.signal });
     expect(action.payload).toMatchObject({ executableArgs: ["greet", "--name", "Neo"] });
   });
+  it("collects and registers only the selected subcommand tree", async () => {
+    const f = await fixture();
+    f.options.config.externalCli.registrations = [{ command: "greet", subcommand: ["team"] }];
+    await writeFile(f.entry, `#!${process.execPath}
+const path = process.argv.slice(2, -1).join(' ');
+const help = path === 'team' ? 'Usage: greet team COMMAND\\nCommands:\\n  list  List people\\n  remove  Remove a person\\n'
+  : path === 'team list' ? 'List people.\\nUsage: greet team list --name NAME\\nOptions:\\n  --name NAME  Person name\\n'
+  : path === 'team remove' ? 'Remove a person.\\nUsage: greet team remove --name NAME\\nOptions:\\n  --name NAME  Person name\\n'
+  : 'Usage: greet COMMAND\\nCommands:\\n  team  Manage people\\n  status  Show status\\n';
+console.log(help);
+`, { mode: 0o755 });
+    f.complete.mockResolvedValue({ kind: "message", content: JSON.stringify({ capabilities: [
+      { command: ["team", "list"], description: "List one named person.", example: "Usage: greet team list --name NAME", evidence: "List people.", parameters: [{ name: "name", description: "Person name", type: "string", flag: "--name", required: true, choices: [], evidence: "--name NAME  Person name" }] },
+      { command: ["team", "remove"], description: "Remove one named person.", example: "Usage: greet team remove --name NAME", evidence: "Remove a person.", parameters: [{ name: "name", description: "Person name", type: "string", flag: "--name", required: true, choices: [], evidence: "--name NAME  Person name" }] }
+    ], rejected: [] }) });
+    const diagnostics = await refreshExternalTools(f.options);
+    expect(diagnostics[0]).toMatchObject({ command: "greet team", status: "approved" });
+    expect(diagnostics[0]?.tools).toHaveLength(2);
+    const request = JSON.parse(f.complete.mock.calls[0]![0].messages[1]!.content as string);
+    expect(request.eligibleCommands).toEqual([["team", "list"], ["team", "remove"]]);
+    expect(JSON.stringify(request.untrustedHelpDocuments)).not.toContain("status");
+  });
+  it("keeps overlapping root and subtree registrations separate while deduplicating tools", async () => {
+    const f = await fixture();
+    f.options.config.externalCli.registrations = [
+      { command: "greet", subcommand: [] },
+      { command: "greet", subcommand: ["team"] }
+    ];
+    await writeFile(f.entry, `#!${process.execPath}
+const path = process.argv.slice(2, -1).join(' ');
+const help = path === '' ? 'Usage: greet COMMAND\\nCommands:\\n  team  Manage people\\n'
+  : path === 'team' ? 'Usage: greet team COMMAND\\nCommands:\\n  list  List people\\n  remove  Remove a person\\n'
+  : path === 'team list' ? 'List people.\\nUsage: greet team list --name NAME\\nOptions:\\n  --name NAME  Person name\\n'
+  : 'Remove a person.\\nUsage: greet team remove --name NAME\\nOptions:\\n  --name NAME  Person name\\n';
+console.log(help);
+`, { mode: 0o755 });
+    f.complete.mockResolvedValue({ kind: "message", content: JSON.stringify({ capabilities: [
+      { command: ["team", "list"], description: "List one named person.", example: "Usage: greet team list --name NAME", evidence: "List people.", parameters: [{ name: "name", description: "Person name", type: "string", flag: "--name", required: true, choices: [], evidence: "--name NAME  Person name" }] },
+      { command: ["team", "remove"], description: "Remove one named person.", example: "Usage: greet team remove --name NAME", evidence: "Remove a person.", parameters: [{ name: "name", description: "Person name", type: "string", flag: "--name", required: true, choices: [], evidence: "--name NAME  Person name" }] }
+    ], rejected: [] }) });
+    const diagnostics = await refreshExternalTools(f.options);
+    expect(diagnostics.map((item) => item.status)).toEqual(["approved", "approved"]);
+    expect(diagnostics.map((item) => item.tools)).toEqual([expect.any(Array), expect.any(Array)]);
+    expect(diagnostics[0]?.tools).toEqual(diagnostics[1]?.tools);
+    expect(f.complete).toHaveBeenCalledTimes(2);
+    expect(f.registry.entries().filter((tool) => f.registry.origin(tool.definition.function.name) === "external-cli")).toHaveLength(2);
+  });
   it("uses companion documentation for an explicitly probed child", async () => {
     const f = await fixture();
     await writeFile(f.entry, `#!${process.execPath}\nconsole.log(process.argv[2] === 'greet' ? 'v1' : 'Manage greetings.\\nUsage: app COMMAND\\nCommands:\\n  greet  Say hello');\n`);
@@ -199,7 +246,7 @@ describe.skipIf(process.platform === "win32")("external CLI integration", () => 
   it("reports broken links and nonexecutables as missing without disabling builtins", async () => {
     const f = await fixture(); await chmod(f.entry, 0o644);
     await symlink(path.join(f.root, "missing"), path.join(f.directory, "broken"));
-    f.options.config.externalCli.commands.push("broken");
+    f.options.config.externalCli.registrations.push({ command: "broken", subcommand: [] });
     expect((await refreshExternalTools(f.options)).every((item) => item.status === "missing")).toBe(true);
     expect(f.registry.entries()).toHaveLength(1);
   });

@@ -50,11 +50,39 @@ async function fixture() {
 it("registers a PATH command immediately and reuses its cached approval", async () => {
   const f = await fixture();
   await f.run("tools", "register", "greet");
-  expect((await f.store.loadConfig()).externalCli.commands).toEqual(["greet"]);
+  expect((await f.store.loadConfig()).externalCli.registrations).toEqual([{ command: "greet", subcommand: [] }]);
   expect(f.complete).toHaveBeenCalledTimes(1);
   expect(f.output).toHaveBeenLastCalledWith(expect.stringContaining(`approved\tgreet\t${f.entry}`));
   await f.run("tools", "register", "greet");
   expect(f.complete).toHaveBeenCalledTimes(1);
+});
+
+it("persists and removes an exact nested subcommand registration", async () => {
+  const f = await fixture();
+  await writeFile(f.entry, `#!${process.execPath}
+console.log(process.argv[2] === 'team' ? 'List a team.\\nUsage: greet team --name NAME\\nOptions:\\n  --name NAME  Team name\\n' : ${JSON.stringify(help)});
+`, { mode: 0o755 });
+  f.complete.mockResolvedValue({ kind: "message", content: JSON.stringify({ capabilities: [{
+    command: ["team"], description: "List a named team.", example: "Usage: greet team --name NAME", evidence: "List a team.",
+    parameters: [{ name: "name", description: "Team name", type: "string", flag: "--name", required: true, choices: [], evidence: "--name NAME  Team name" }]
+  }], rejected: [] }) });
+  await f.run("tools", "register", "greet", "team");
+  await f.run("tools", "register", "greet");
+  expect((await f.store.loadConfig()).externalCli.registrations).toEqual([
+    { command: "greet", subcommand: ["team"] },
+    { command: "greet", subcommand: [] }
+  ]);
+  await f.run("tools", "unregister", "greet", "team");
+  expect((await f.store.loadConfig()).externalCli.registrations).toEqual([{ command: "greet", subcommand: [] }]);
+  await writeFile(f.entry, `#!${process.execPath}
+console.log(process.argv[2] === 'team' && process.argv[3] === 'list' ? 'List teams.\\nUsage: greet team list --name NAME\\nOptions:\\n  --name NAME  Team name\\n' : ${JSON.stringify(help)});
+`, { mode: 0o755 });
+  f.complete.mockResolvedValue({ kind: "message", content: JSON.stringify({ capabilities: [{
+    command: ["team", "list"], description: "List one named team.", example: "Usage: greet team list --name NAME", evidence: "List teams.",
+    parameters: [{ name: "name", description: "Team name", type: "string", flag: "--name", required: true, choices: [], evidence: "--name NAME  Team name" }]
+  }], rejected: [] }) });
+  await f.run("tools", "register", "greet", "team", "list");
+  expect((await f.store.loadConfig()).externalCli.registrations).toContainEqual({ command: "greet", subcommand: ["team", "list"] });
 });
 
 it("does not save missing commands and rejects paths or arguments", async () => {
@@ -62,16 +90,16 @@ it("does not save missing commands and rejects paths or arguments", async () => 
   await expect(f.run("tools", "register", "missing")).rejects.toThrow("not an executable available on PATH");
   await expect(f.run("tools", "register", "./greet")).rejects.toThrow("without arguments or path separators");
   await expect(f.run("tools", "register", "greet --name Neo")).rejects.toThrow("without arguments or path separators");
-  expect((await f.store.loadConfig()).externalCli.commands).toEqual([]);
+  expect((await f.store.loadConfig()).externalCli.registrations).toEqual([]);
 });
 
 it("lists cached registrations offline and unregisters them", async () => {
   const f = await fixture();
-  await f.store.saveConfig({ ...(await f.store.loadConfig()), externalCli: { commands: ["greet"] } });
+  await f.store.saveConfig({ ...(await f.store.loadConfig()), externalCli: { registrations: [{ command: "greet", subcommand: [] }] } });
   await f.run("tools", "registrations");
   expect(f.output).toHaveBeenLastCalledWith(expect.stringContaining(`greet\t${f.entry}\tpending`));
   await f.run("tools", "unregister", "greet");
-  expect((await f.store.loadConfig()).externalCli.commands).toEqual([]);
+  expect((await f.store.loadConfig()).externalCli.registrations).toEqual([]);
   await expect(f.run("tools", "unregister", "greet")).rejects.toThrow("not registered");
 });
 
@@ -85,7 +113,7 @@ it("keeps a rejected registration for later refresh and uses a selected profile 
   await f.store.saveAuth({ version: 1, providers: { deepseek: { type: "api_key", key: "test-key" }, work: { type: "api_key", key: "test-key" } } });
   f.complete.mockResolvedValueOnce({ kind: "message", content: JSON.stringify({ capabilities: [], rejected: [{ command: [], reason: "Insufficient documentation" }] }) });
   await f.run("--profile", "work", "tools", "register", "greet");
-  expect((await f.store.loadConfig()).externalCli.commands).toEqual(["greet"]);
+  expect((await f.store.loadConfig()).externalCli.registrations).toEqual([{ command: "greet", subcommand: [] }]);
   expect(createProviderMock.mock.calls[0]?.[0]).toMatchObject({ provider: { id: "work" } });
   expect(process.exitCode).toBe(1);
 });

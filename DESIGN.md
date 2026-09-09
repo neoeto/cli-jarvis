@@ -44,8 +44,8 @@ cj config tui                 Open the full-screen application settings interfac
 cj config list                Show configuration with secrets redacted
 cj tools list                 List registered Tools
 cj tools show <name>          Show Tool schema, behavior, and risk metadata
-cj tools register <command>   Register and immediately review one PATH executable
-cj tools unregister <command> Remove one PATH executable registration
+cj tools register <command> [subcommand...]   Register and immediately review a PATH executable or subcommand tree
+cj tools unregister <command> [subcommand...] Remove one exact PATH CLI registration
 cj tools registrations        Show PATH registrations and cached review state
 cj skills list                List available local Agent Skills
 cj skills trust               Trust this workspace's .agents/skills content
@@ -72,9 +72,9 @@ There is deliberately no global `--yes`, permanent trust switch, or automatic `s
 
 ### 2.1.1 PATH Tool registrations
 
-External command support is opt-in and stores command names, never directories or arbitrary shell text. `cj tools register <command>` resolves the name using the current process PATH, collects bounded `--help`/`-h` documentation, and asks the active Profile to map documented leaf capabilities to structured Tool schemas. A registration follows PATH at each task boundary; a changed entry path, symlink target, executable, or companion documentation invalidates its cached review before it can execute.
+External command support is opt-in and stores a PATH command name plus an optional fixed subcommand path, never directories or arbitrary shell text. `cj tools register <command> [subcommand...]` resolves only the root name using the current process PATH, collects bounded `--help`/`-h` documentation from the selected subtree, and asks the active Profile to map its documented leaf capabilities to structured Tool schemas. A registration follows PATH at each task boundary; a changed entry path, symlink target, executable, companion documentation, or selected path invalidates its cached review before it can execute.
 
-Only POSIX executable files and Windows `.exe`/`.com` executables are supported. Shell aliases, functions, builtins, path values, command arguments, and Windows `.cmd`/`.bat` wrappers are excluded. External capabilities run a reviewed absolute executable path with fixed subcommands and validated argv. They always retain high risk, confirmation, cancellation, output limits, redaction, audit, and pre-execution fingerprint validation.
+Only POSIX executable files and Windows `.exe`/`.com` executables are supported. Shell aliases, functions, builtins, path values, option arguments, and Windows `.cmd`/`.bat` wrappers are excluded. External capabilities run a reviewed absolute executable path with the selected fixed subcommand prefix and validated argv. They always retain high risk, confirmation, cancellation, output limits, redaction, audit, and pre-execution fingerprint validation.
 
 ### 2.1.2 Agent Skills
 

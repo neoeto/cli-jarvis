@@ -204,7 +204,7 @@ async function executeTask(options: ExecuteTaskOptions): Promise<ExecuteTaskResu
     const allowedRoots = await resolveAllowedRoots(options.workspaceRoot, options.config.security.allowedRoots);
     const memoryFacts = options.config.memory.enabled ? await memoryStore.list() : [];
     const externalConfig = await store.loadConfig();
-    if (externalConfig.externalCli.commands.length) {
+    if (externalConfig.externalCli.registrations.length) {
       await renderer({ type: "status", message: options.language === "zh-CN" ? "正在检查外部 CLI 及其用法说明…" : "Checking external CLIs and documentation…" });
     }
     const externalDiagnostics = await refreshExternalTools({ registry, config: { ...options.config, externalCli: externalConfig.externalCli }, stateDir: store.paths.stateDir,
@@ -334,7 +334,7 @@ Examples:
   cj "List the largest files in this directory"
   cj chat
   cj config
-  cj tools register <command>
+  cj tools register <command> [subcommand...]
   cj tools doctor
 
 Registered PATH CLI capabilities are refreshed and reviewed before each task.

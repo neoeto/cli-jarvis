@@ -55,7 +55,7 @@ describe("config TUI rendering", () => {
     const app = render(<ConfigTuiApp
       initial={createConfigDraft(defaultConfig, auth)}
       externalEntries={{}}
-      validateExternalCommand={async (value) => ({ command: value, entry: "/usr/bin/example" })}
+      validateExternalCommand={async (value) => ({ registration: { command: value, subcommand: [] }, entry: "/usr/bin/example" })}
       onApply={async () => undefined}
     />);
     const frame = app.lastFrame() ?? "";
@@ -72,7 +72,7 @@ describe("config TUI rendering", () => {
         providers: { tavily: { type: "env", variable: "TAVILY_API_KEY" } }
       })}
       externalEntries={{}}
-      validateExternalCommand={async (value) => ({ command: value, entry: "/usr/bin/example" })}
+      validateExternalCommand={async (value) => ({ registration: { command: value, subcommand: [] }, entry: "/usr/bin/example" })}
       onApply={async () => undefined}
     />);
     app.stdin.write("\u001b[B");
@@ -87,9 +87,9 @@ describe("config TUI rendering", () => {
 
   it("shows registered PATH commands with their current resolution", async () => {
     const app = render(<ConfigTuiApp
-      initial={createConfigDraft({ ...defaultConfig, externalCli: { commands: ["greet", "missing"] } }, auth)}
+      initial={createConfigDraft({ ...defaultConfig, externalCli: { registrations: [{ command: "greet", subcommand: [] }, { command: "missing", subcommand: [] }] } }, auth)}
       externalEntries={{ greet: "/usr/local/bin/greet", missing: "" }}
-      validateExternalCommand={async (value) => ({ command: value, entry: `/usr/local/bin/${value}` })}
+      validateExternalCommand={async (value) => ({ registration: { command: value, subcommand: [] }, entry: `/usr/local/bin/${value}` })}
       onApply={async () => undefined}
     />);
     for (let index = 0; index < 5; index++) app.stdin.write("\u001b[B");
