@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { EventSink } from "../agent/events.js";
+import type { EventSink, ModelInteractionRequest } from "../agent/events.js";
 import type { ModelProvider, ModelRequest, ModelResponse, ModelUsage } from "./types.js";
 
 export interface UsageSummary {
@@ -88,10 +88,21 @@ export class TrackedModelProvider implements ModelProvider {
 
   async complete(request: ModelRequest, signal: AbortSignal): Promise<ModelResponse> {
     const requestId = randomUUID();
+    // Snapshot before the provider runs: callers reuse and append to the
+    // transcript after each turn, while the audit must reflect exactly what
+    // this request received.
+    const interactionRequest: ModelInteractionRequest = {
+      model: request.model,
+      messages: structuredClone(request.messages),
+      tools: structuredClone(request.tools),
+      toolChoice: request.toolChoice
+    };
     let finalUsage: ModelUsage | undefined;
+    let response: ModelResponse | undefined;
+    let failure: unknown;
     let success = false;
     try {
-      const response = await this.provider.complete({
+      response = await this.provider.complete({
         ...request,
         onUsage: async (usage) => {
           finalUsage = usage;
@@ -101,8 +112,20 @@ export class TrackedModelProvider implements ModelProvider {
       finalUsage = response.usage ?? finalUsage;
       success = true;
       return response;
+    } catch (error) {
+      failure = error;
+      throw error;
     } finally {
       this.accumulator.add(finalUsage);
+      await this.onEvent({
+        type: "model_interaction",
+        requestId,
+        model: request.model,
+        purpose: this.purpose,
+        request: interactionRequest,
+        ...(response ? { response: structuredClone(response) } : {}),
+        ...(failure ? { error: failure instanceof Error ? failure.message : String(failure) } : {})
+      });
       await this.onEvent({
         type: "model_usage",
         requestId,

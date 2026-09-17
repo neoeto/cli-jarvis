@@ -303,7 +303,7 @@ Multiple Tool calls returned in one model response are deliberately executed seq
 
 ### 6.3 Clarification
 
-The model asks a question only when a missing answer materially changes targets or side effects. It calls the low-risk `ask_question` Tool alone rather than ending ordinary text with a question. It calls the low-risk `finish_task` Tool alone to deliver the final answer. The host requests `tool_choice: required`; ordinary text without a Tool call fails closed with `MODEL_RESPONSE_INVALID`, so prose questions cannot silently terminate tasks. The host emits a first-class clarification event, presents up to eight single- or multi-select choices plus a free-text alternative, and returns the structured answer to the model as a Tool result. Answers are never written to audit history. In a non-interactive terminal this Tool emits its request event then fails closed with `INTERACTION_REQUIRED`.
+The model asks a question only when a missing answer materially changes targets or side effects. It calls the low-risk `ask_question` Tool alone rather than ending ordinary text with a question. It calls the low-risk `finish_task` Tool alone to deliver the final answer. The host requests `tool_choice: required`; ordinary text without a Tool call fails closed with `MODEL_RESPONSE_INVALID`, so prose questions cannot silently terminate tasks. The host emits a first-class clarification event, presents up to eight single- or multi-select choices plus a free-text alternative, and returns the structured answer to the model as a Tool result. The answer is omitted from generic audit events, but appears (with secret redaction) in a later LLM-request snapshot because that is the data sent to the provider. In a non-interactive terminal this Tool emits its request event then fails closed with `INTERACTION_REQUIRED`.
 
 ## 7. Tool contract
 
@@ -529,9 +529,10 @@ The local JSONL audit stream records:
 - Provider and model.
 - User request hash plus an optional short redacted summary, not raw content.
 - Tool name, risk level, redacted argument summary, confirmation result, duration, and outcome.
+- A secret-redacted snapshot of every LLM request (messages, Tool definitions, and Tool results) and its response or failure, for local HTML export.
 - Exit status and normalized error code.
 
-It does not record API Keys, environment values, file bodies, complete command output, or full model responses.
+It does not record API Keys. Because an LLM request snapshot contains exactly what was sent to the provider, it can include user prompts, model output, and Tool/file/command data when those were placed in model context; audit files and exports are sensitive local artifacts.
 
 `cj history` renders these events locally. Nothing is uploaded by `cj`.
 

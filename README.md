@@ -164,12 +164,12 @@ cj history export ./one-chat.html --session 1234abcd
 cj history prune --older-than 90
 ```
 
-History is local JSONL metadata. It stores a short, redacted task title and provider-reported Token usage, but does not retain raw prompts, assistant responses, file contents, environment values, or API Keys. Creating the title makes one additional model request per task; failures fall back to a redacted prompt excerpt and do not block the task.
+History is local JSONL data protected with owner-only permissions. In addition to a short task title and provider-reported Token usage, it records a secret-redacted snapshot of each LLM request and response so an HTML export can show the actual interaction. This includes prompt, model context, Tool definitions and Tool results when they were sent to the provider; treat the history file and its exports as sensitive. API Keys are redacted before storage. Creating the title makes one additional model request per task; failures fall back to a redacted prompt excerpt and do not block the task.
 The default terminal view combines all turns of a chat session into one line while keeping standalone tasks separate. Use `--verbose` to include Token usage statistics, `--tasks` for every task/turn, `--session` for one chat's turns, or `--events` for the underlying event stream. JSONL remains event-level for automation compatibility.
 With `--verbose`, Token totals include title generation, agent requests, and any uncached external CLI review requests. The display breaks input into cache-hit and cache-miss tokens when the provider reports that detail, shows the cache hit rate, and reports reasoning tokens as a subset of output tokens. Input equals cache-hit plus cache-miss for DeepSeek; reasoning is already included in output and is never added to the total again. Missing provider usage or breakdown fields are reported as unknown or partial rather than zero, and SDK/provider retries that are not surfaced separately may not be measurable.
-Exporting to a `.html` filename (or using `--format html`) creates a standalone, human-readable page with chat and task summaries, Token usage, and collapsible redacted event details.
+Exporting to a `.html` filename (or using `--format html`) creates a standalone, human-readable page with chat and task summaries, Token usage, collapsible LLM request/response records, and redacted event details. Older history entries do not contain interaction snapshots.
 
-Long-term memory is off by default and separate from audit history. Only facts you explicitly add are stored; file contents, model output, command output, and credentials are never added automatically.
+Long-term memory is off by default and separate from audit history. Only facts you explicitly add are stored; file contents, model output, command output, and credentials are never added automatically to memory.
 
 ```bash
 cj memory on

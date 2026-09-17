@@ -196,4 +196,44 @@ describe("AuditStore", () => {
     expect(html).toContain("&lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt;");
     expect(html).not.toContain("<script>alert('unsafe')</script>");
   });
+
+  it("exports full redacted LLM request and response snapshots", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cj-audit-test-"));
+    created.push(root);
+    const store = new AuditStore(path.join(root, "history.jsonl"));
+    const context = store.createTaskContext({ cliVersion: "test", cwd: root, provider: "fake", model: "fake", promptHash: "interaction" });
+    await store.taskStarted(context);
+    await store.agentEvent(context.taskId, {
+      type: "model_interaction",
+      requestId: "request-1",
+      model: "fake",
+      purpose: "agent",
+      request: {
+        model: "fake",
+        messages: [{ role: "user", content: "Please use token=super-secret-value to inspect <project>." }],
+        tools: [],
+        toolChoice: "required"
+      },
+      response: {
+        kind: "message",
+        content: "<script>unsafe()</script> received token=another-secret-value"
+      }
+    });
+    await store.taskFinished(context.taskId, true);
+
+    const output = path.join(root, "interaction.html");
+    await store.exportTo(output, { task: context.taskId }, "html");
+    const raw = await readFile(store.file, "utf8");
+    const html = await readFile(output, "utf8");
+
+    expect(raw).toContain("Please use token=[REDACTED]");
+    expect(raw).not.toContain("super-secret-value");
+    expect(raw).not.toContain("another-secret-value");
+    expect(html).toContain("LLM 交互");
+    expect(html).toContain("发送给 LLM 的数据");
+    expect(html).toContain("LLM 返回的响应");
+    expect(html).toContain("Please use token=[REDACTED]");
+    expect(html).toContain("&lt;script&gt;unsafe()&lt;/script&gt;");
+    expect(html).not.toContain("<script>unsafe()</script>");
+  });
 });

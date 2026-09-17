@@ -116,7 +116,7 @@ describe("cj CLI end to end", () => {
     expect(stdout).toContain("hello.txt");
     expect(stdout).toContain("找到 hello.txt");
     const audit = await readFile(store.paths.historyFile, "utf8");
-    expect(audit).not.toContain("列出当前目录文件");
+    expect(audit).toContain("列出当前目录文件");
     expect(audit).not.toContain("e2e-secret-key");
     expect(audit).toContain("task_finished");
 

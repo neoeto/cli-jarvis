@@ -31,7 +31,15 @@ describe("tracked model usage", () => {
       cacheReportedRequests: 1,
       reasoningReportedRequests: 1
     });
-    expect(events).toEqual([expect.objectContaining({ type: "model_usage", purpose: "agent", success: true, usage: expect.objectContaining({ totalTokens: 7, cachedInputTokens: 3, reasoningTokens: 1 }) })]);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "model_interaction",
+        purpose: "agent",
+        request: expect.objectContaining({ model: "fake-model", messages: request.messages, tools: [], toolChoice: "none" }),
+        response: expect.objectContaining({ kind: "message", content: "ok" })
+      }),
+      expect.objectContaining({ type: "model_usage", purpose: "agent", success: true, usage: expect.objectContaining({ totalTokens: 7, cachedInputTokens: 3, reasoningTokens: 1 }) })
+    ]));
     expect(formatUsage(accumulator.summary(), "zh-CN")).toContain("缓存命中:3 未命中:2 命中率:60.0%");
   });
 
@@ -56,9 +64,11 @@ describe("tracked model usage", () => {
       cacheReportedRequests: 0,
       reasoningReportedRequests: 0
     });
-    expect(events).toEqual([
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "model_interaction", purpose: "title", error: "stream failed" }),
+      expect.objectContaining({ type: "model_interaction", purpose: "agent", error: "no response" }),
       expect.objectContaining({ type: "model_usage", success: false, usage: { inputTokens: 8, outputTokens: 1, totalTokens: 9 } }),
       expect.objectContaining({ type: "model_usage", success: false })
-    ]);
+    ]));
   });
 });

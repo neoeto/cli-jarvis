@@ -71,6 +71,23 @@ function safeText(value: string): string {
   return redactSecrets(value).value.slice(0, 2_000);
 }
 
+/**
+ * Preserve full LLM exchanges for an explicit history export while applying
+ * the same secret redaction used by the regular audit metadata.  Unlike
+ * safeText this intentionally does not truncate content: the point of this
+ * record is to make the exact request/response inspectable after the task.
+ */
+function safeInteractionValue(value: unknown): unknown {
+  if (typeof value === "string") return redactSecrets(value).value;
+  if (Array.isArray(value)) return value.map(safeInteractionValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, safeInteractionValue(entry)])
+    );
+  }
+  return value;
+}
+
 function auditDataForAgentEvent(event: AgentEvent): Record<string, unknown> {
   switch (event.type) {
     case "status":
@@ -140,6 +157,15 @@ function auditDataForAgentEvent(event: AgentEvent): Record<string, unknown> {
       return { memoryIds: event.ids, purpose: safeText(event.purpose) };
     case "task_title":
       return { title: safeText(event.title), generated: event.generated };
+    case "model_interaction":
+      return {
+        requestId: event.requestId,
+        model: safeText(event.model),
+        purpose: safeText(event.purpose),
+        request: safeInteractionValue(event.request),
+        ...(event.response === undefined ? {} : { response: safeInteractionValue(event.response) }),
+        ...(event.error === undefined ? {} : { error: safeText(event.error) })
+      };
     case "model_usage":
       return {
         requestId: event.requestId,

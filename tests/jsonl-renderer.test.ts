@@ -22,4 +22,26 @@ describe("JSONL renderer", () => {
       write.mockRestore();
     }
   });
+
+  it("keeps full LLM exchanges out of public JSONL output", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await jsonlRenderer({
+        type: "model_interaction",
+        requestId: "request-1",
+        model: "fake",
+        purpose: "agent",
+        request: {
+          model: "fake",
+          messages: [{ role: "user", content: "private prompt" }],
+          tools: [],
+          toolChoice: "required"
+        },
+        response: { kind: "message", content: "private response" }
+      });
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+    }
+  });
 });

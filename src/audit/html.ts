@@ -80,6 +80,7 @@ function eventLabel(event: string): string {
     status: "状态",
     memory_used: "使用记忆",
     task_title: "任务标题",
+    model_interaction: "模型交互",
     model_usage: "模型用量",
     usage_summary: "用量汇总"
   }[event] ?? event;
@@ -108,6 +109,34 @@ function collapseEvents(records: AuditRecord[]): DisplayEvent[] {
   return output;
 }
 
+function displayJson(value: unknown): string {
+  return escapeHtml(JSON.stringify(value, null, 2) ?? "未记录");
+}
+
+function modelInteractionDetails(records: AuditRecord[]): string {
+  const interactions = records.filter((record) => record.event === "model_interaction");
+  if (!interactions.length) return "";
+  return `<section class="interactions" aria-label="LLM 交互记录">
+    <div class="interaction-heading"><h3>LLM 交互</h3><p>完整保留发送给模型的请求与模型返回内容；密钥已脱敏。</p></div>
+    ${interactions.map((record, index) => {
+      const purpose = typeof record.data.purpose === "string" ? record.data.purpose : "未知用途";
+      const model = typeof record.data.model === "string" ? record.data.model : "未知模型";
+      const requestId = typeof record.data.requestId === "string" ? record.data.requestId : "";
+      const response = record.data.response ?? (record.data.error === undefined ? "未记录响应" : { error: record.data.error });
+      return `<details class="model-interaction"${index === interactions.length - 1 ? " open" : ""}>
+        <summary><span><b>调用 ${index + 1}</b><small>${escapeHtml(purpose)} · ${escapeHtml(model)}</small></span><time datetime="${escapeHtml(record.timestamp)}">${escapeHtml(formatTimestamp(record.timestamp))}</time></summary>
+        <div class="interaction-body">
+          ${requestId ? `<p class="interaction-id">请求 ID：<code>${escapeHtml(requestId)}</code></p>` : ""}
+          <div class="interaction-columns">
+            <section><h4>发送给 LLM 的数据</h4><pre>${displayJson(record.data.request ?? "未记录请求")}</pre></section>
+            <section><h4>LLM 返回的响应</h4><pre>${displayJson(response)}</pre></section>
+          </div>
+        </div>
+      </details>`;
+    }).join("\n")}
+  </section>`;
+}
+
 function taskDetails(records: AuditRecord[], summaries: TaskHistorySummary[]): string {
   const byTask = new Map<string, AuditRecord[]>();
   for (const record of records) {
@@ -122,16 +151,17 @@ function taskDetails(records: AuditRecord[], summaries: TaskHistorySummary[]): s
     const taskRecords = byTask.get(taskId) ?? [];
     const summary = summariesByTask.get(taskId);
     const status = summary?.status ?? "incomplete";
-    const eventRows = collapseEvents(taskRecords).map((event) => {
+    const eventRows = collapseEvents(taskRecords.filter((record) => record.event !== "model_interaction")).map((event) => {
       const count = event.count > 1 ? `<span class="event-count">合并 ${event.count} 个片段</span>` : "";
       return `<tr><td><time datetime="${escapeHtml(event.timestamp)}">${escapeHtml(formatTimestamp(event.timestamp))}</time></td><td><span class="event-name">${escapeHtml(eventLabel(event.type))}</span><code>${escapeHtml(event.type)}</code>${count}</td><td><pre>${escapeHtml(JSON.stringify(event.data, null, 2))}</pre></td></tr>`;
     }).join("\n");
+    const interactions = modelInteractionDetails(taskRecords);
     const session = summary?.sessionId
       ? `<span><small>会话</small><code>${escapeHtml(summary.sessionId)}</code></span>`
       : "<span><small>会话</small><b>单次任务</b></span>";
     const title = summary?.title ?? "旧记录，无介绍";
     const tokens = summary ? formatTokenUsage(summary) : "未知";
-    return `<details class="task-detail"><summary class="task-summary"><span class="task-primary"><span><small>任务</small><code>${escapeHtml(taskId)}</code><small>${escapeHtml(title)}</small></span><span class="status status-${status}">${statusLabel(status)}</span></span><span class="task-secondary"><span><small>开始</small><time datetime="${escapeHtml(summary?.startedAt ?? taskRecords[0]?.timestamp ?? "")}">${escapeHtml(formatTimestamp(summary?.startedAt ?? taskRecords[0]?.timestamp ?? ""))}</time></span>${session}<span><small>Token</small><b>${escapeHtml(tokens)}</b></span><span><small>耗时</small><b>${formatDuration(summary?.durationMs)}</b></span></span></summary><div class="detail-body"><div class="detail-intro"><p>已折叠连续的助手流式输出。以下内容仅包含已脱敏的审计元数据。</p></div><div class="table-scroll"><table class="events"><caption class="sr-only">${escapeHtml(taskId)} 的事件明细</caption><thead><tr><th scope="col">时间</th><th scope="col">事件</th><th scope="col">脱敏数据</th></tr></thead><tbody>${eventRows}</tbody></table></div></div></details>`;
+    return `<details class="task-detail"><summary class="task-summary"><span class="task-primary"><span><small>任务</small><code>${escapeHtml(taskId)}</code><small>${escapeHtml(title)}</small></span><span class="status status-${status}">${statusLabel(status)}</span></span><span class="task-secondary"><span><small>开始</small><time datetime="${escapeHtml(summary?.startedAt ?? taskRecords[0]?.timestamp ?? "")}">${escapeHtml(formatTimestamp(summary?.startedAt ?? taskRecords[0]?.timestamp ?? ""))}</time></span>${session}<span><small>Token</small><b>${escapeHtml(tokens)}</b></span><span><small>耗时</small><b>${formatDuration(summary?.durationMs)}</b></span></span></summary><div class="detail-body"><div class="detail-intro"><p>已折叠连续的助手流式输出。LLM 交互会保留完整请求与响应；所有记录均会脱敏密钥。</p></div>${interactions}<div class="table-scroll"><table class="events"><caption class="sr-only">${escapeHtml(taskId)} 的事件明细</caption><thead><tr><th scope="col">时间</th><th scope="col">事件</th><th scope="col">脱敏数据</th></tr></thead><tbody>${eventRows}</tbody></table></div></div></details>`;
   }).join("\n");
 }
 
@@ -275,6 +305,21 @@ export function renderAuditHtml(
   .detail-body { border-top: 1px solid var(--line); }
   .detail-intro { padding: 12px 18px; background: var(--surface-muted); }
   .detail-intro p { margin: 0; color: var(--muted); font-size: .82rem; }
+  .interactions { margin: 18px; }
+  .interaction-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+  .interaction-heading h3, .interaction-columns h4 { margin: 0; font-size: .92rem; }
+  .interaction-heading p, .interaction-id { margin: 0; color: var(--muted); font-size: .78rem; }
+  .model-interaction { margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .model-interaction > summary { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 10px 14px; cursor: pointer; background: var(--surface-muted); }
+  .model-interaction > summary span { min-width: 0; }
+  .model-interaction > summary b, .model-interaction > summary small { display: block; }
+  .model-interaction > summary time { color: var(--muted); font-size: .76rem; white-space: nowrap; }
+  .interaction-body { padding: 12px 14px 14px; }
+  .interaction-id { margin-bottom: 10px; }
+  .interaction-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .interaction-columns section { min-width: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .interaction-columns h4 { padding: 8px 10px; background: var(--surface-muted); }
+  .interaction-columns pre { max-width: none; padding: 10px; }
   .detail-body .table-scroll { margin: 16px 18px 18px; border-radius: 10px; }
   .events { min-width: 760px; font-size: .8rem; }
   .events th:first-child { width: 174px; }
@@ -295,6 +340,9 @@ export function renderAuditHtml(
     .task-summary { grid-template-columns: 1fr; gap: 14px; }
     .task-summary::before { top: 18px; }
     .task-secondary { grid-template-columns: 1fr 1fr; }
+    .interaction-heading { display: block; }
+    .interaction-heading p { margin-top: 5px; }
+    .interaction-columns { grid-template-columns: 1fr; }
     .section-heading { display: block; }
     .section-heading p { margin-top: 6px; }
   }
@@ -314,7 +362,7 @@ export function renderAuditHtml(
     <div>
       <p class="eyebrow">本地审计记录</p>
       <h1>CJ 历史报告</h1>
-      <p class="lede">按任务汇总的本地执行记录，可展开查看已脱敏的事件元数据。</p>
+      <p class="lede">按任务汇总的本地执行记录，可展开查看已脱敏的 LLM 请求、响应与事件元数据。</p>
     </div>
     <dl class="report-meta">
       <div><dt>导出范围</dt><dd>${escapeHtml(scope)}</dd></div>
@@ -346,7 +394,7 @@ export function renderAuditHtml(
     ${taskDetails(records, summaries) || "<p class=\"empty-row\">没有可导出的审计事件。</p>"}
   </section>
 
-  <footer class="report-footer"><p>此页面由 cj 在本机生成，只包含已脱敏的审计元数据。用量来自供应商响应；${usageRequests ? `${unknownUsageRequests}/${usageRequests} 个模型请求未返回用量。` : "这些旧记录不含逐请求用量。"}</p></footer>
+  <footer class="report-footer"><p>此页面由 cj 在本机生成，LLM 交互记录保留请求和响应全文并已脱敏密钥；请按敏感资料妥善保管。用量来自供应商响应；${usageRequests ? `${unknownUsageRequests}/${usageRequests} 个模型请求未返回用量。` : "这些旧记录不含逐请求用量。"}</p></footer>
 </main>
 </body>
 </html>`;

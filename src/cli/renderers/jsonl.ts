@@ -12,5 +12,8 @@ function publicEvent(event: AgentEvent): Record<string, unknown> {
 }
 
 export const jsonlRenderer: EventSink = (event: AgentEvent) => {
+  // Full exchanges are persisted only in the owner-only audit log for HTML
+  // export. Streaming them to stdout would leak model context to pipelines.
+  if (event.type === "model_interaction") return;
   process.stdout.write(`${JSON.stringify({ version: 1, ...publicEvent(event) })}\n`);
 };
