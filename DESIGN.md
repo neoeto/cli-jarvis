@@ -46,6 +46,7 @@ cj tools list                 List registered Tools
 cj tools show <name>          Show Tool schema, behavior, and risk metadata
 cj tools register <command> [subcommand...]   Register and immediately review a PATH executable or subcommand tree
 cj tools unregister <command> [subcommand...] Remove one exact PATH CLI registration
+cj tools set-risk <name> <low|medium|high> Set one approved external Tool's risk level
 cj tools registrations        Show PATH registrations and cached review state
 cj skills list                List available local Agent Skills
 cj skills trust               Trust this workspace's .agents/skills content
@@ -74,7 +75,7 @@ There is deliberately no global `--yes`, permanent trust switch, or automatic `s
 
 External command support is opt-in and stores a PATH command name plus an optional fixed subcommand path, never directories or arbitrary shell text. `cj tools register <command> [subcommand...]` resolves only the root name using the current process PATH, collects bounded `--help`/`-h` documentation from the selected subtree, and asks the active Profile to map its documented leaf capabilities to structured Tool schemas. A registration follows PATH at each task boundary; a changed entry path, symlink target, executable, companion documentation, or selected path invalidates its cached review before it can execute.
 
-Only POSIX executable files and Windows `.exe`/`.com` executables are supported. Shell aliases, functions, builtins, path values, option arguments, and Windows `.cmd`/`.bat` wrappers are excluded. External capabilities run a reviewed absolute executable path with the selected fixed subcommand prefix and validated argv. They always retain high risk, confirmation, cancellation, output limits, redaction, audit, and pre-execution fingerprint validation.
+Only POSIX executable files and Windows `.exe`/`.com` executables are supported. Shell aliases, functions, builtins, path values, option arguments, and Windows `.cmd`/`.bat` wrappers are excluded. External capabilities run a reviewed absolute executable path with the selected fixed subcommand prefix and validated argv. They default to high risk, and an explicit user setting through `cj tools set-risk <generated-tool-name> <low|medium|high>` can change the configured risk for that specific approved capability. The setting is persisted in `config.json`, applies to prepared actions and normal confirmation policy, and does not weaken cancellation, output limits, redaction, audit, or pre-execution fingerprint validation.
 
 ### 2.1.2 Agent Skills
 
@@ -377,6 +378,8 @@ The host never reconstructs an action from model arguments after confirmation. I
 The Tool determines the operation semantics. For example, `trash_files` promises to move targets to the platform trash; a future `delete_files` Tool could promise permanent deletion. The Agent contains no special-case deletion policy.
 
 `run_command` is always elevated to `high` by host policy because an arbitrary executable can have undeclared effects. This override cannot be weakened by the model or Tool arguments.
+
+Generated external Tools default to `high`. A user may explicitly set an approved external Tool to `medium` or `low` with `cj tools set-risk`; the override is applied by the host to both the Tool metadata and each prepared action, so `tools list`, `tools show`, and execution policy report the same level. Setting `high` restores the default behavior.
 
 ### 7.4 Initial built-in Tools
 

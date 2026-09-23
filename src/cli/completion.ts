@@ -29,7 +29,7 @@ function commandPath(root: Command, tokens: string[]): { command: Command; path:
   return { command, path };
 }
 
-async function cachedExternalToolNames(store: ConfigStore, registry: ToolRegistry): Promise<string[]> {
+async function cachedExternalToolNames(store: ConfigStore, registry: ToolRegistry, externalOnly = false): Promise<string[]> {
   try {
     // Loading cached reviews through the regular discovery path keeps this
     // completion query offline: no provider is supplied, so no help probe or
@@ -44,7 +44,9 @@ async function cachedExternalToolNames(store: ConfigStore, registry: ToolRegistr
   } catch {
     // Completion must remain useful when a registered PATH command is unavailable.
   }
-  return registry.entries().map((tool) => tool.definition.function.name);
+  return registry.entries()
+    .filter((tool) => !externalOnly || registry.origin(tool.definition.function.name) === "external-cli")
+    .map((tool) => tool.definition.function.name);
 }
 
 async function profileNames(store: ConfigStore): Promise<string[]> {
@@ -86,6 +88,10 @@ async function candidates(
     }
   } else if (resolved.path.at(-2) === "tools" && resolved.path.at(-1) === "show" && store && registry) {
     values = await cachedExternalToolNames(store, registry);
+  } else if (resolved.path.at(-2) === "tools" && resolved.path.at(-1) === "set-risk" && store && registry) {
+    values = previous === "set-risk"
+      ? await cachedExternalToolNames(store, registry, true)
+      : ["low", "medium", "high"];
   } else if (resolved.path.at(-2) === "tools" && resolved.path.at(-1) === "unregister" && store) {
     values = await registeredExternalCommands(store);
   } else {

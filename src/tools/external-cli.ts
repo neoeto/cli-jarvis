@@ -8,7 +8,7 @@ import type { AppConfig, ExternalCliRegistration } from "../config/schema.js";
 import type { ModelProvider } from "../providers/types.js";
 import { minimalProcessEnvironment, runProcess } from "../process/run.js";
 import { redactSecrets } from "../policy/sensitive-data.js";
-import { createExternalTool } from "./external-cli-tool.js";
+import { createExternalTool, externalToolName } from "./external-cli-tool.js";
 import { helpChildren, parseReview, reviewHelp, usableHelp, validateReview, type HelpDocument, type Review } from "./external-cli-review.js";
 import type { ToolRegistry } from "./registry.js";
 
@@ -313,11 +313,13 @@ export async function refreshExternalTools(options: ExternalRefreshOptions): Pro
       }
       if (cached) {
         for (const capability of cached.review.capabilities) {
+          const toolName = externalToolName(command, capability.command);
+          const riskLevel = config.externalCli.riskOverrides?.[toolName] ?? "high";
           const tool = createExternalTool(command, initial.target, capability, async () => {
             if ((await snapshotCommand(command, signal)).fingerprint !== initial.fingerprint) {
               throw new Error("CLI, PATH resolution or documentation changed; refresh before executing");
             }
-          });
+          }, riskLevel);
           diagnostic.tools.push(tool.definition.function.name);
           const existingOrigin = registry.origin(tool.definition.function.name);
           if (existingOrigin === "external-cli") continue;

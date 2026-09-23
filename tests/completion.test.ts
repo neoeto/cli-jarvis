@@ -33,7 +33,7 @@ describe("shell completion", () => {
     const store = new ConfigStore(getAppPaths({ CJ_CONFIG_DIR: root }));
     await store.saveConfig({
       ...defaultConfig,
-      externalCli: { registrations: [{ command: "greet", subcommand: [] }, { command: "kubectl", subcommand: [] }] },
+      externalCli: { registrations: [{ command: "greet", subcommand: [] }, { command: "kubectl", subcommand: [] }], riskOverrides: {} },
       profiles: {
         ...defaultConfig.profiles,
         work: defaultConfig.profiles.default

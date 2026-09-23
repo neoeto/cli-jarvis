@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshExternalTools, resolveExternalCommand } from "../src/tools/external-cli.js";
+import { externalToolName } from "../src/tools/external-cli-tool.js";
 import { helpChildren, parseReview, reviewHelp, validateReview, type Review } from "../src/tools/external-cli-review.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { appConfigSchema, defaultConfig } from "../src/config/schema.js";
@@ -27,7 +28,7 @@ async function fixture(content = help) {
   const complete = vi.fn(async () => ({ kind: "message" as const, content: JSON.stringify(review) }));
   const provider: ModelProvider = { id: "fake", complete };
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
-  const config = { ...structuredClone(defaultConfig), externalCli: { registrations: [{ command: "greet", subcommand: [] }] } };
+  const config = { ...structuredClone(defaultConfig), externalCli: { registrations: [{ command: "greet", subcommand: [] }], riskOverrides: {} } };
   const options = { registry, config, stateDir: root, signal: new AbortController().signal, provider: async () => provider };
   return { root, directory, entry, registry, complete, options };
 }
@@ -85,6 +86,20 @@ describe.skipIf(process.platform === "win32")("PATH command resolution", () => {
 });
 
 describe.skipIf(process.platform === "win32")("external CLI integration", () => {
+  it("applies a configured risk override to the Tool and prepared action", async () => {
+    const f = await fixture();
+    const name = externalToolName("greet", []);
+    f.options.config.externalCli.riskOverrides = { [name]: "low" };
+
+    await refreshExternalTools(f.options);
+
+    const tool = f.registry.get(name);
+    expect(tool.defaultRisk).toBe("low");
+    const action = await tool.prepare({ name: "Neo" }, { workspaceRoot: f.root, signal: f.options.signal });
+    expect(action.riskLevel).toBe("low");
+    expect(new PolicyEngine().evaluate(action)).toMatchObject({ effectiveRisk: "low", confirmation: undefined });
+  });
+
   it("probes, reviews, caches, maps argv and keeps confirmation policy", async () => {
     const f = await fixture();
     expect((await refreshExternalTools(f.options))[0]!.status).toBe("approved");

@@ -7,6 +7,7 @@ import type { ConfigStore } from "../../config/store.js";
 import { discoverLocalTools } from "../../tools/extensions.js";
 import { CjError } from "../../shared/errors.js";
 import displayWidth from "string-width";
+import type { RiskLevel } from "../../tools/types.js";
 
 export interface ToolListRow {
   name: string;
@@ -25,6 +26,13 @@ export interface ToolListPage {
 
 const DEFAULT_TOOL_LIST_PAGE_SIZE = 20;
 const MAX_TOOL_LIST_PAGE_SIZE = 100;
+
+function parseRiskLevel(value: string): RiskLevel {
+  if (value !== "low" && value !== "medium" && value !== "high") {
+    throw new CjError("CONFIG_INVALID", `risk level must be one of: low, medium, high`);
+  }
+  return value;
+}
 
 function positiveInteger(value: string | number | undefined, label: string, maximum: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
@@ -108,7 +116,7 @@ export function addToolsCommand(program: Command, registry: ToolRegistry, store?
     .addHelpText("after", `
 Register one existing PATH executable or subcommand tree at a time. CJ collects bounded help
 and reviews documented leaf capabilities in that scope before exposing them as Tools. Every external
-Tool remains high risk and requires confirmation at execution time.
+Tool defaults to high risk. Use set-risk to adjust a specific approved external Tool.
 
 list, show, registrations and doctor use cached reviews without running help
 probes or contacting a model. register and refresh collect help and use the
@@ -117,6 +125,7 @@ selected model as needed.
 Examples:
   cj tools register kubectl get pods
   cj tools list --page 2 --page-size 20
+  cj tools set-risk <generated-tool-name> medium
   cj tools registrations
   cj tools unregister kubectl get pods
   cj tools refresh --force
@@ -160,7 +169,7 @@ Examples:
       await resolveExternalCommand(registered.command);
       const config = await store.loadConfig();
       if (!config.externalCli.registrations.some((item) => sameExternalRegistration(item, registered))) {
-        await store.saveConfig({ ...config, externalCli: { registrations: [...config.externalCli.registrations, registered] } });
+        await store.saveConfig({ ...config, externalCli: { ...config.externalCli, registrations: [...config.externalCli.registrations, registered] } });
       }
       const [result] = await external(true, false, [registered]);
       if (!result) throw new CjError("TOOL_FAILED", `Registered command was not available for review: ${externalRegistrationLabel(registered)}`);
@@ -178,9 +187,32 @@ Examples:
       if (!config.externalCli.registrations.some((item) => sameExternalRegistration(item, registered))) {
         throw new CjError("CONFIG_INVALID", `Command is not registered: ${externalRegistrationLabel(registered)}`);
       }
-      await store.saveConfig({ ...config, externalCli: { registrations: config.externalCli.registrations.filter((item) => !sameExternalRegistration(item, registered)) } });
+      await store.saveConfig({ ...config, externalCli: { ...config.externalCli, registrations: config.externalCli.registrations.filter((item) => !sameExternalRegistration(item, registered)) } });
       registry.removeExternalTools();
       process.stdout.write(`Unregistered PATH CLI: ${externalRegistrationLabel(registered)}\n`);
+    });
+
+  command.command("set-risk")
+    .description("Set the risk level for one approved external Tool")
+    .argument("<tool-name>", "generated external Tool name from cj tools list")
+    .argument("<level>", "low, medium or high")
+    .action(async (name: string, level: string) => {
+      if (!store) throw new CjError("CONFIG_INVALID", "Local configuration is unavailable");
+      const riskLevel = parseRiskLevel(level);
+      await external();
+      const tool = registry.entries().find((entry) => entry.definition.function.name === name);
+      if (!tool || registry.origin(name) !== "external-cli") {
+        throw new CjError("CONFIG_INVALID", `Unknown approved external Tool: ${name}`);
+      }
+      const config = await store.loadConfig();
+      await store.saveConfig({
+        ...config,
+        externalCli: {
+          ...config.externalCli,
+          riskOverrides: { ...config.externalCli.riskOverrides, [name]: riskLevel }
+        }
+      });
+      process.stdout.write(`Set external Tool risk: ${name}\t${riskLevel}\n`);
     });
 
   command.command("registrations")

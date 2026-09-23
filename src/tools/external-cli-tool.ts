@@ -3,14 +3,20 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import type { Capability } from "./external-cli-review.js";
 import { RunCommandTool } from "./builtins/run-command.js";
-import type { Tool, ToolContext, PreparedAction } from "./types.js";
+import type { RiskLevel, Tool, ToolContext, PreparedAction } from "./types.js";
 
 export function externalToolName(registration: string, command: string[]): string {
   const label = `${registration}_${command.join("_")}`.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 40);
   return `cli_${label}_${createHash("sha256").update(JSON.stringify([registration, command])).digest("hex").slice(0, 12)}`;
 }
 
-export function createExternalTool(registration: string, executable: string, capability: Capability, assertUnchanged: () => Promise<void>): Tool {
+export function createExternalTool(
+  registration: string,
+  executable: string,
+  capability: Capability,
+  assertUnchanged: () => Promise<void>,
+  riskLevel: RiskLevel = "high"
+): Tool {
   const runner = new RunCommandTool();
   const name = externalToolName(registration, capability.command);
   const shape: Record<string, z.ZodTypeAny> = {};
@@ -28,8 +34,8 @@ export function createExternalTool(registration: string, executable: string, cap
   properties.timeout_ms = { type: "integer", minimum: 100, maximum: 120000, default: 30000 };
   const schema = z.object(shape).strict();
   return {
-    defaultRisk: "high", possibleEffects: runner.possibleEffects,
-    definition: { type: "function", function: { name, description: `${capability.description}\nUsage: ${capability.example}\nExternal CLI; execution requires confirmation.`, parameters: { type: "object", additionalProperties: false, properties, required: capability.parameters.filter((item) => item.required).map((item) => item.name) } } },
+    defaultRisk: riskLevel, possibleEffects: runner.possibleEffects,
+    definition: { type: "function", function: { name, description: `${capability.description}\nUsage: ${capability.example}\nExternal CLI; risk level is configurable with cj tools set-risk.`, parameters: { type: "object", additionalProperties: false, properties, required: capability.parameters.filter((item) => item.required).map((item) => item.name) } } },
     parse: (input) => schema.parse(input),
     async prepare(raw: unknown, context: ToolContext): Promise<PreparedAction> {
       await assertUnchanged();
@@ -44,7 +50,7 @@ export function createExternalTool(registration: string, executable: string, cap
         else { if (parameter.flag) args.push(parameter.flag); args.push(String(value)); }
       }
       const action = await runner.prepare(runner.parse({ command: executable, args, cwd: input.cwd, environment: { HOME: os.homedir() }, timeoutMs: Math.min(Number(input.timeout_ms), context.toolTimeoutMs ?? 120000) }), context);
-      return { ...action, toolName: name };
+      return { ...action, toolName: name, riskLevel };
     },
     async execute(action, context) {
       await assertUnchanged();

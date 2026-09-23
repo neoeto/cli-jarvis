@@ -262,7 +262,7 @@ export function ConfigTuiApp({ initial, onApply, validateExternalCommand, extern
         remove: () => openConfirm({
           title: tr("移除 PATH 工具注册", "Remove PATH tool registration"),
           body: label,
-          accept: () => setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { registrations: removeAt(current.config.externalCli.registrations, index) } } }))
+          accept: () => setDraft((current) => ({ ...current, config: { ...current.config, externalCli: { ...current.config.externalCli, registrations: removeAt(current.config.externalCli.registrations, index) } } }))
         })
       }; }),
       { label: tr("注册 PATH 工具", "Register PATH tool"), value: "+", activate: () => openEditor({ title: tr("PATH 命令及可选子命令", "PATH command and optional subcommands"), value: "", submit: async (value) => {
@@ -270,6 +270,7 @@ export function ConfigTuiApp({ initial, onApply, validateExternalCommand, extern
         const label = externalRegistrationLabel(resolved.registration);
         setExternalPaths((current) => ({ ...current, [label]: resolved.entry }));
         setDraft((current) => ({ ...current, config: { ...current.config, externalCli: {
+          ...current.config.externalCli,
           registrations: current.config.externalCli.registrations.some((item) => sameExternalRegistration(item, resolved.registration))
             ? current.config.externalCli.registrations : [...current.config.externalCli.registrations, resolved.registration]
         } } }));

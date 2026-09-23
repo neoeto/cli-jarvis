@@ -111,7 +111,7 @@ describe("config TUI rendering", () => {
 
   it("shows registered PATH commands with their current resolution", async () => {
     const app = render(<ConfigTuiApp
-      initial={createConfigDraft({ ...defaultConfig, externalCli: { registrations: [{ command: "greet", subcommand: [] }, { command: "missing", subcommand: [] }] } }, auth)}
+      initial={createConfigDraft({ ...defaultConfig, externalCli: { registrations: [{ command: "greet", subcommand: [] }, { command: "missing", subcommand: [] }], riskOverrides: {} } }, auth)}
       externalEntries={{ greet: "/usr/local/bin/greet", missing: "" }}
       validateExternalCommand={async (value) => ({ registration: { command: value, subcommand: [] }, entry: `/usr/local/bin/${value}` })}
       onApply={async () => undefined}

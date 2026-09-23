@@ -46,10 +46,16 @@ const legacyConfigSchema = z.object({
 
 const externalCliCommandSchema = z.string().min(1).max(255).regex(/^[^\s\\/:\0]+$/, "CLI commands must be a single PATH command name");
 const externalCliSubcommandSchema = z.string().min(1).max(100).regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "CLI subcommands must be command tokens");
+const externalCliRiskLevelSchema = z.enum(["low", "medium", "high"]);
+const externalCliToolNameSchema = z.string().min(1).max(128).regex(/^[a-z][a-z0-9_]*$/, "External Tool names must contain only lowercase letters, digits and underscores");
 export const externalCliRegistrationSchema = z.object({
   command: externalCliCommandSchema,
   subcommand: z.array(externalCliSubcommandSchema).max(16).default([])
 }).strict();
+const externalCliRiskOverridesSchema = z.record(externalCliToolNameSchema, externalCliRiskLevelSchema).refine(
+  (items) => Object.keys(items).length <= 2_000,
+  "External Tool risk overrides are limited to 2000 entries"
+);
 const externalCliDirectoriesSchema = z.object({
   directories: z.array(z.string().min(1).refine((value) => path.isAbsolute(value), "CLI directories must be absolute")).max(100).default([])
 }).strict().default({ directories: [] });
@@ -78,8 +84,9 @@ export const appConfigSchema = z.object({
     registrations: z.array(externalCliRegistrationSchema).max(100).default([]).refine(
       (items) => new Set(items.map((item) => JSON.stringify([item.command, item.subcommand]))).size === items.length,
       "External CLI registrations must be unique"
-    )
-  }).strict().default({ registrations: [] }),
+    ),
+    riskOverrides: externalCliRiskOverridesSchema.default({})
+  }).strict().default({ registrations: [], riskOverrides: {} }),
   plugins: z.object({ enabled: z.array(z.string().min(1)).max(100).default([]) }).default({ enabled: [] }),
   skills: z.object({
     trustedWorkspaceDirectories: z.array(z.object({
@@ -204,7 +211,7 @@ export const defaultConfig: AppConfig = {
   security: { allowedRoots: ["."] },
   memory: { enabled: false },
   webSearch: { enabled: false },
-  externalCli: { registrations: [] },
+  externalCli: { registrations: [], riskOverrides: {} },
   plugins: { enabled: [] },
   skills: { trustedWorkspaceDirectories: [] }
 };
@@ -214,12 +221,12 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
   const previous = previousConfigSchema.safeParse(input);
   if (previous.success) {
     const { externalCli, ...config } = previous.data;
-    return { ...config, version: 4, externalCli: { registrations: externalCli.commands.map((command) => ({ command, subcommand: [] })) } };
+    return { ...config, version: 4, externalCli: { registrations: externalCli.commands.map((command) => ({ command, subcommand: [] })), riskOverrides: {} } };
   }
   const v2 = v2ConfigSchema.safeParse(input);
   if (v2.success) {
     const { externalCli: _discardedDirectories, ...config } = v2.data;
-    return { ...config, version: 4, externalCli: { registrations: [] } };
+    return { ...config, version: 4, externalCli: { registrations: [], riskOverrides: {} } };
   }
   const legacy = legacyConfigSchema.safeParse(input);
   if (!legacy.success) return undefined;
@@ -241,7 +248,7 @@ export function migrateLegacyConfig(input: unknown): AppConfig | undefined {
     security: { allowedRoots: ["."] },
     memory: { enabled: false },
     webSearch: { enabled: false },
-    externalCli: { registrations: [] },
+    externalCli: { registrations: [], riskOverrides: {} },
     plugins: { enabled: [] },
     skills: { trustedWorkspaceDirectories: [] }
   };

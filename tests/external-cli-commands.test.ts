@@ -12,6 +12,7 @@ import { getAppPaths } from "../src/config/paths.js";
 import { defaultConfig } from "../src/config/schema.js";
 import { addToolsCommand } from "../src/cli/commands/tools.js";
 import { ToolRegistry } from "../src/tools/registry.js";
+import { externalToolName } from "../src/tools/external-cli-tool.js";
 
 const created: string[] = [];
 const originalPath = process.env.PATH;
@@ -57,6 +58,22 @@ it("registers a PATH command immediately and reuses its cached approval", async 
   expect(f.complete).toHaveBeenCalledTimes(1);
 });
 
+it("sets and persists the risk level for an approved external Tool", async () => {
+  const f = await fixture();
+  await f.run("tools", "register", "greet");
+  const name = externalToolName("greet", []);
+
+  await f.run("tools", "set-risk", name, "medium");
+
+  expect((await f.store.loadConfig()).externalCli.riskOverrides).toEqual({ [name]: "medium" });
+  expect(f.output).toHaveBeenLastCalledWith(`Set external Tool risk: ${name}\tmedium\n`);
+  await f.run("tools", "list");
+  expect(f.output).toHaveBeenLastCalledWith(expect.stringContaining(`${name}`));
+  expect(f.output).toHaveBeenLastCalledWith(expect.stringContaining("medium"));
+  await expect(f.run("tools", "set-risk", "run_command", "low")).rejects.toThrow("Unknown approved external Tool");
+  await expect(f.run("tools", "set-risk", name, "invalid")).rejects.toThrow("risk level must be one of");
+});
+
 it("persists and removes an exact nested subcommand registration", async () => {
   const f = await fixture();
   await writeFile(f.entry, `#!${process.execPath}
@@ -95,7 +112,7 @@ it("does not save missing commands and rejects paths or arguments", async () => 
 
 it("lists cached registrations offline and unregisters them", async () => {
   const f = await fixture();
-  await f.store.saveConfig({ ...(await f.store.loadConfig()), externalCli: { registrations: [{ command: "greet", subcommand: [] }] } });
+  await f.store.saveConfig({ ...(await f.store.loadConfig()), externalCli: { registrations: [{ command: "greet", subcommand: [] }], riskOverrides: {} } });
   await f.run("tools", "registrations");
   expect(f.output).toHaveBeenLastCalledWith(expect.stringContaining(`greet\t${f.entry}\tpending`));
   await f.run("tools", "unregister", "greet");

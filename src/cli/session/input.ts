@@ -1,4 +1,4 @@
-import { createInterface, type Interface } from "node:readline";
+import { createInterface, type Interface, type Key } from "node:readline";
 import { Writable, type Readable } from "node:stream";
 import displayWidth from "string-width";
 
@@ -15,6 +15,7 @@ interface PendingAnswer {
 }
 
 const SINGLE_CELL_BACKSPACE_ERASE = "\b \b";
+const FULL_REDRAW_CURSOR_HOME = "\x1b[1G";
 
 /**
  * Node's readline occasionally erases a CJK double-width character with a
@@ -32,7 +33,8 @@ class DisplayWidthOutput extends Writable {
 
   constructor(
     private readonly target: Writable,
-    private readonly takePendingEraseWidth: () => number | undefined
+    private readonly takePendingEraseWidth: () => number | undefined,
+    private readonly clearPendingEraseWidths: () => void
   ) {
     super();
     this.isTTY = (target as Writable & { isTTY?: boolean }).isTTY;
@@ -55,6 +57,10 @@ class DisplayWidthOutput extends Writable {
       this.target.write(renderBackspaceErase(this.takePendingEraseWidth() ?? 1), callback);
       return;
     }
+    // Newer Node versions redraw after a delete instead of writing \b \b.
+    // Discard widths queued while its writable output was buffering so they
+    // cannot affect a later legacy-style erase.
+    if (content.startsWith(FULL_REDRAW_CURSOR_HOME)) this.clearPendingEraseWidths();
     this.target.write(chunk, encoding, callback);
   }
 }
@@ -75,13 +81,16 @@ export function createReadlineSessionInput(
   output: Writable & { isTTY?: boolean }
 ): SessionInput {
   const terminal = Boolean(input.isTTY && output.isTTY);
-  let pendingEraseWidth: number | undefined;
+  const pendingEraseWidths: number[] = [];
+  const clearPendingEraseWidths = (): void => {
+    pendingEraseWidths.length = 0;
+  };
   const terminalOutput = terminal
-    ? new DisplayWidthOutput(output, () => {
-      const width = pendingEraseWidth;
-      pendingEraseWidth = undefined;
-      return width;
-    })
+    ? new DisplayWidthOutput(
+      output,
+      () => pendingEraseWidths.shift(),
+      clearPendingEraseWidths
+    )
     : output;
   const readline = createInterface({
     input,
@@ -98,28 +107,29 @@ export function createReadlineSessionInput(
   let lines: string[] = [];
   const interrupts = new Set<() => void>();
 
-  const recordBackspaceWidth = (chunk: unknown): void => {
-    // While a task is running, another UI (for example ask_question) may own
-    // stdin. Its keypresses must not affect this idle chat editor.
+  const recordBackspaceWidth = (_value: string, key: Key): void => {
+    // Keypress events are emitted one at a time even when the terminal
+    // delivers several keystrokes in one data chunk. Record the width before
+    // readline mutates its line so every CJK backspace gets its own erase
+    // width.
     if (!pending) {
-      pendingEraseWidth = undefined;
+      clearPendingEraseWidths();
       return;
     }
-    const value = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : typeof chunk === "string" ? chunk : "";
-    pendingEraseWidth = value === "\x7f" || value === "\b"
-      ? previousCharacterWidth(readline.line, readline.cursor)
-      : undefined;
+    if (key.name !== "backspace") return;
+    const width = previousCharacterWidth(readline.line, readline.cursor);
+    if (width !== undefined && width > 1) pendingEraseWidths.push(width);
   };
-  // The listener must run before readline mutates line/cursor in response to
-  // the backspace byte.
-  input.prependListener("data", recordBackspaceWidth);
+  // This listener must run before readline's keypress listener, not merely
+  // before the raw data decoder, because one input chunk can contain multiple
+  // backspaces.
+  input.prependListener("keypress", recordBackspaceWidth);
 
   const settle = (): void => {
     if (!pending) return;
     const answer = lines.join("\n");
     lines = [];
-    settleTimer = undefined;
-    pendingEraseWidth = undefined;
+    clearPendingEraseWidths();
     const current = pending;
     pending = undefined;
     // Do not leave the chat readline consuming stdin while a running task may
@@ -138,7 +148,8 @@ export function createReadlineSessionInput(
 
   readline.on("close", () => {
     closed = true;
-    input.removeListener("data", recordBackspaceWidth);
+    input.removeListener("keypress", recordBackspaceWidth);
+    clearPendingEraseWidths();
     if (settleTimer) clearTimeout(settleTimer);
     if (pending) {
       const current = pending;

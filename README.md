@@ -241,6 +241,7 @@ cj tools register kubectl get pods
 cj tools registrations
 cj tools list
 cj tools list --page 2 --page-size 20
+cj tools set-risk <generated-tool-name> medium
 cj tools doctor
 cj tools unregister kubectl get pods
 ```
@@ -259,4 +260,4 @@ cj --profile work tools refresh   # 使用另一个 Profile 审核
 cj tools show <generated-tool-name>
 ```
 
-`tools list` 以表格展示能力，默认每页 20 项；可通过 `--page` 和 `--page-size`（1 到 100）查看指定页，表格底部会显示页码、总数和每页数量。`tools list`、`tools show`、`tools registrations` 和 `tools doctor` 只读取当前 PATH 与缓存，不会启动外部 CLI 或调用模型。审核缓存位于本地状态目录的 `external-cli-cache/`，与审计历史分离。所有批准后的外部 Tool 固定可执行文件和子命令路径、验证 argv，并继承确认、取消、超时、输出限制、脱敏和审计；每一次执行仍需要交互确认。
+`tools list` 以表格展示能力，默认每页 20 项；可通过 `--page` 和 `--page-size`（1 到 100）查看指定页，表格底部会显示页码、总数和每页数量。使用 `cj tools set-risk <generated-tool-name> <low|medium|high>` 可按 `tools list` 或 `tools show` 中的具体外部 Tool 名称调整风险级别，设置保存在 `config.json`；外部 Tool 默认是 `high`，设置为 `medium` 或 `low` 后按对应的确认策略执行，设置为 `high` 可恢复默认行为。此设置只适用于已审核通过的外部 Tool，不受模型调用控制。`tools list`、`tools show`、`tools registrations` 和 `tools doctor` 只读取当前 PATH 与缓存，不会启动外部 CLI 或调用模型。审核缓存位于本地状态目录的 `external-cli-cache/`，与审计历史分离。所有批准后的外部 Tool 固定可执行文件和子命令路径、验证 argv，并继承取消、超时、输出限制、脱敏、审计和执行前指纹校验。
